@@ -28,10 +28,11 @@
 | 平台 | 支持状态 | 说明 |
 |------|----------|------|
 | **[Claude Code](https://claude.ai/code)** | ✅ 完全支持 | 原生 SKILL.md 格式 |
-| **[OpenCode](https://opencode.ai/)** | ✅ 完全支持 | 从 `~/.config/opencode/skills/` 或项目 `.opencode/skills/` 加载 SKILL.md |
+| **[OpenCode](https://opencode.ai/)** | ✅ 完全支持 | 从 `~/.config/opencode/skills/`、`.opencode/skills/` 加载，并兼容 `~/.claude/skills/` 与 `~/.agents/skills/` |
 | **[OpenClaw](https://openclaw.ai/) / [ClawHub](https://clawhub.ai/)** | ✅ 完全支持 | `metadata.openclaw` 命名空间，依赖检测，`clawhub install` |
 | **Hermes Agent** | ✅ 完全支持 | `metadata.hermes` 命名空间，分类：research |
 | **[pi-mono](https://github.com/badlogic/pi-mono)** | ✅ 完全支持 | `metadata.pimo` 命名空间 |
+| **[OpenAI Codex](https://openai.com/index/introducing-codex/)** | ✅ 完全支持 | `agents/openai.yaml` 侧车文件 |
 | **[SkillsMP](https://skillsmp.com/)** | ✅ 可索引 | GitHub topics 已配置 |
 
 ## 对比
@@ -160,6 +161,16 @@ skills:
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
 ```
 
+### OpenAI Codex
+
+```bash
+# 用户级安装
+git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
+
+# 项目级安装
+git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skills/scholar-deep-research
+```
+
 ### SkillsMP
 
 ```bash
@@ -175,6 +186,7 @@ skills install scholar-deep-research
 | OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
 | Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | 通过 `external_dirs` 配置 |
 | pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
+| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
 | SkillsMP | 不适用（CLI 安装） | 不适用 |
 
 ## 使用方法
@@ -233,6 +245,8 @@ scholar-deep-research/
 ├── README.md                      # 英文文档
 ├── README_CN.md                   # 本文件
 ├── requirements.txt               # httpx, pypdf
+├── agents/
+│   └── openai.yaml                # OpenAI Codex 侧车文件（接口、能力、前置条件）
 ├── scripts/
 │   ├── _common.py                 # 共享论文 schema 与输出 helper
 │   ├── research_state.py          # 状态文件管理（核心）

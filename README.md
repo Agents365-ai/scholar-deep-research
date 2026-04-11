@@ -28,10 +28,11 @@ Works with all major AI coding agents that support the [Agent Skills](https://ag
 | Platform | Status | Details |
 |----------|--------|---------|
 | **[Claude Code](https://claude.ai/code)** | ✅ Full support | Native SKILL.md format |
-| **[OpenCode](https://opencode.ai/)** | ✅ Full support | Loads `SKILL.md` from `~/.config/opencode/skills/` or project `.opencode/skills/` |
+| **[OpenCode](https://opencode.ai/)** | ✅ Full support | Reads from `~/.config/opencode/skills/`, `.opencode/skills/`, and (cross-compat) `~/.claude/skills/` and `~/.agents/skills/` |
 | **[OpenClaw](https://openclaw.ai/) / [ClawHub](https://clawhub.ai/)** | ✅ Full support | `metadata.openclaw` namespace, dependency gating, `clawhub install` |
 | **Hermes Agent** | ✅ Full support | `metadata.hermes` namespace, category: research |
 | **[pi-mono](https://github.com/badlogic/pi-mono)** | ✅ Full support | `metadata.pimo` namespace |
+| **[OpenAI Codex](https://openai.com/index/introducing-codex/)** | ✅ Full support | `agents/openai.yaml` sidecar with capabilities and prerequisites |
 | **[SkillsMP](https://skillsmp.com/)** | ✅ Indexable | GitHub topics configured |
 
 ## Comparison
@@ -160,6 +161,16 @@ skills:
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
 ```
 
+### OpenAI Codex
+
+```bash
+# User-level install
+git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
+
+# Project-level install
+git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skills/scholar-deep-research
+```
+
 ### SkillsMP
 
 ```bash
@@ -175,6 +186,7 @@ skills install scholar-deep-research
 | OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
 | Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | Via `external_dirs` config |
 | pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
+| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
 | SkillsMP | N/A (installed via CLI) | N/A |
 
 ## Usage
@@ -235,6 +247,8 @@ scholar-deep-research/
 ├── README.md                      # This file
 ├── README_CN.md                   # 中文文档
 ├── requirements.txt               # httpx, pypdf
+├── agents/
+│   └── openai.yaml                # OpenAI Codex sidecar (interface, capabilities, prereqs)
 ├── scripts/
 │   ├── _common.py                 # Shared paper schema + emit helper
 │   ├── research_state.py          # Central state file management
