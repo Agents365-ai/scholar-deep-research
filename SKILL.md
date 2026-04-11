@@ -1,0 +1,357 @@
+---
+name: scholar-deep-research
+description: Use when the user asks for a literature review, academic deep dive, research report, state-of-the-art survey, topic scoping, comparative analysis of methods/papers, grant background, or any request that needs multi-source scholarly evidence with citations. Also trigger proactively when a user question clearly requires academic grounding (e.g. "what's known about X", "compare approach A vs B in the literature", "summarize the field of Y"). Runs a 7-phase, script-driven research workflow across OpenAlex, arXiv, Crossref, and PubMed, with deduplication, transparent ranking, citation chasing, self-critique, and structured report output with verifiable citations.
+license: MIT
+homepage: https://github.com/Agents365-ai/scholar-deep-research
+compatibility: Requires Python 3.9+ with httpx and pypdf (see requirements.txt). Works offline-first (no MCP required) but enriches with Semantic Scholar / Brave MCP tools when available.
+platforms: [macos, linux, windows]
+metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"author":"Agents365-ai","version":"0.1.0"}
+---
+
+# Scholar Deep Research
+
+End-to-end academic research workflow that turns a question into a cited, structured report. Built for depth: multi-source federation, transparent ranking, citation chasing, and a mandatory self-critique pass before the report ships.
+
+## When to use
+
+**Explicit triggers:** "literature review", "research report", "state of the art", "survey the field", "what's known about X", "deep research on Y", "systematic review", "scoping review", "compare papers on Z".
+
+**Proactive triggers (use without being asked):**
+- User asks a factual question whose honest answer is "it depends on the literature"
+- User frames a research plan and needs the background section
+- User is drafting a paper intro/related-work and hasn't yet scoped prior work
+- User proposes a method and asks whether it's novel
+
+**Do not use when:** a single known paper answers the question, the user wants a tutorial (not a survey), or they're debugging code.
+
+## Guiding principles
+
+1. **Scripts over vibes.** Every search, dedupe, rank, and export step runs through a script in `scripts/`. The same input should produce the same output. Do not improvise ranking or counting by eye.
+2. **Sources are federated, not singular.** OpenAlex is the primary backbone (free, 240M+ works, no key). arXiv, Crossref, and PubMed fill gaps. MCP tools (Semantic Scholar / Brave) are *enrichment*, not *dependency* — if they time out, research continues.
+3. **State is persistent.** Everything goes through `research_state.json`. Queries ran, papers seen, decisions made, phase progress. Research becomes resumable and auditable.
+4. **Citations are anchors, not decorations.** Every non-trivial claim in the draft carries `[^id]` where `id` matches a paper in state. Unanchored claims are treated as hallucinations and fail the gate.
+5. **Saturation, not exhaustion, is the stop signal.** A phase ends when a new round of search adds <20% novel papers AND no new paper has >100 citations.
+6. **Self-critique is a phase, not a checkbox.** Phase 6 reads the draft with adversarial intent. Its output goes into the report appendix.
+
+## The 7-phase workflow
+
+```
+Phase 0: Scope       → decompose question, pick archetype, init state
+Phase 1: Discovery   → multi-source search, dedupe
+Phase 2: Triage      → rank, select top-N for deep read
+Phase 3: Deep read   → extract evidence per paper
+Phase 4: Chasing     → citation graph (forward + backward)
+Phase 5: Synthesis   → cluster by theme, map tensions
+Phase 6: Self-critique → adversarial review, gap finding
+Phase 7: Report      → render archetype template, export bibliography
+```
+
+Each phase writes to `research_state.json` before advancing. If the user pauses or a session crashes, the next run reads the state and picks up from the last completed phase.
+
+### Phase 0 — Scope
+
+Before searching anything, decompose the question.
+
+1. **Restate the question** in one sentence. Surface ambiguities.
+2. **PICO-style decomposition** (or equivalent for non-biomedical fields):
+   - **P**opulation / **P**roblem — what system, species, setting, or phenomenon?
+   - **I**ntervention / **I**ndependent var — what method, factor, or manipulation?
+   - **C**omparison — against what baseline or alternative?
+   - **O**utcome — what is being measured or claimed?
+3. **Pick an archetype** that matches user intent (see `references/report_templates.md`):
+   - `literature_review` — what is known about X (default)
+   - `systematic_review` — rigorous PRISMA-lite, comparison of many studies on one narrow question
+   - `scoping_review` — what has been studied and how (breadth over depth)
+   - `comparative_analysis` — X vs Y, head-to-head
+   - `grant_background` — narrative background + gap for a proposal
+4. **Draft keyword clusters** — 3-5 Boolean clusters covering synonyms, acronyms, and variant spellings. Include a "negative" cluster (terms to exclude).
+5. **Initialize state:**
+   ```bash
+   python scripts/research_state.py init \
+     --question "<restated question>" \
+     --archetype literature_review \
+     --output research_state.json
+   ```
+
+When in doubt about archetype, ask the user. The choice shapes everything downstream.
+
+### Phase 1 — Discovery
+
+Run searches across all available sources in parallel. OpenAlex is primary; the others fill gaps.
+
+```bash
+# Primary (no API key, always available)
+python scripts/search_openalex.py --query "<cluster 1>" --limit 50 --state research_state.json
+python scripts/search_openalex.py --query "<cluster 2>" --limit 50 --state research_state.json
+
+# Domain-specific (use when relevant)
+python scripts/search_arxiv.py  --query "<cluster>" --limit 50 --state research_state.json  # CS/ML/physics
+python scripts/search_pubmed.py --query "<cluster>" --limit 50 --state research_state.json  # biomedical
+python scripts/search_crossref.py --query "<cluster>" --limit 50 --state research_state.json  # DOI-backed metadata
+
+# Dedupe across sources (DOI-first, title-similarity fallback)
+python scripts/dedupe_papers.py --state research_state.json
+```
+
+**MCP enrichment (optional, run if available):** call `mcp__asta__search_papers_by_relevance` and `mcp__asta__snippet_search` and feed results via `scripts/research_state.py ingest`. If the MCP call errors or times out, do not retry — move on.
+
+**Iterate.** Read the state file. Are there keyword gaps? Are there authors appearing 3+ times whose other work you haven't pulled? Run another round. Stop when saturation hits:
+
+```bash
+python scripts/research_state.py saturation --state research_state.json
+# Prints: new_in_last_round=12%, max_citations_new=34 → SATURATED
+```
+
+### Phase 2 — Triage
+
+Rank the deduplicated corpus and pick the top-N for deep reading.
+
+```bash
+python scripts/rank_papers.py \
+  --state research_state.json \
+  --question "<phase 0 question>" \
+  --alpha 0.4 --beta 0.3 --gamma 0.2 --delta 0.1 \
+  --top 20
+```
+
+The formula is transparent — the script prints it and writes the components to state so the report can cite its own methodology:
+
+```
+score = α·relevance + β·log10(citations+1)/3 + γ·recency_decay(half-life=5yr) + δ·venue_prior
+```
+
+Defaults target a literature review. For a *scoping* review prefer higher `α` (relevance) and lower `β` (citations). For a *systematic* review of a narrow question, lower `α` and higher `β`.
+
+Write the top-N selection to state:
+
+```bash
+python scripts/research_state.py select --state research_state.json --top 20
+```
+
+### Phase 3 — Deep read
+
+For each paper in the top-N: get the best available full text, extract evidence, attach to state.
+
+1. **Preferred order for full text:** publisher PDF URL from OpenAlex → arXiv PDF → institutional repository → preprint server → abstract only (with a warning attached to the paper record).
+2. **Extract text** when a PDF is available:
+   ```bash
+   python scripts/extract_pdf.py --input paper.pdf --output paper.txt
+   ```
+3. **Fill the per-paper evidence slot** in state (the agent does this; no script). For each paper capture:
+   - `question_or_hypothesis`
+   - `method` (one sentence)
+   - `key_findings` (3-5 bullets, each with a page/section anchor)
+   - `limitations`
+   - `relevance_to_question` (how this paper moves the answer)
+
+**Abstract-only papers are marked** `depth: shallow` in state — they can appear in the report but should not be the *only* source for any claim.
+
+### Phase 4 — Citation chasing
+
+Take the top 5-10 highest-ranked papers and expand the graph.
+
+```bash
+python scripts/build_citation_graph.py \
+  --state research_state.json \
+  --seed-top 8 \
+  --direction both \
+  --depth 1
+```
+
+The script pulls backward references (what did this paper cite?) and forward citations (who cited this paper?), deduplicates against existing state, and writes new candidate papers with `discovered_via: citation_chase`. Run rank + deep read again on any new high-scoring additions.
+
+**Special case — a highly cited paper has never been challenged.** If rank says a paper is top-3 by citations but no critiques appear in the corpus, search explicitly for `"<first author> <year>" critique OR limitations OR reanalysis OR failed replication`. This is the confirmation-bias backstop.
+
+### Phase 5 — Synthesis
+
+No scripts here — this is where the agent earns its keep. Cluster and structure:
+
+1. **Thematic clustering.** Group the top-N into 3-6 themes that map onto the report outline. Themes should be orthogonal: a paper can be primary to one, secondary to at most one other.
+2. **Tension map.** Where do papers disagree? For each disagreement, note: which papers, on what, and whether the disagreement is empirical (different data), methodological (different tools), or theoretical (different framings).
+3. **Timeline.** When relevant, a chronological arc: seminal paper → consolidation → refinement → current frontier.
+4. **Venn / gap.** What has been studied well, partially, and not at all? The gap is the pivot for Phase 7.
+
+### Phase 6 — Self-critique
+
+**This is not optional.** Load `assets/prompts/self_critique.md` and run the full checklist against your draft (still unpublished). The checklist covers:
+
+- Single-source claims (any claim backed by only one paper?)
+- Citation/recency skew (is the latest-2-years window covered?)
+- Venue bias (is the corpus dominated by one journal/venue?)
+- Author bias (does one lab dominate the citations?)
+- Untested high-citation papers (anyone cite a paper without reading a critique?)
+- Contradictions buried (any tension in Phase 5 that got glossed over?)
+- Archetype fit (does the structure match the chosen archetype?)
+- Unanchored claims (any statement without a `[^id]` anchor?)
+
+Write findings to `research_state.json` under `self_critique` and fix blockers before Phase 7. Findings go into the report appendix verbatim — the reader deserves to see what the research process doubted itself about.
+
+### Phase 7 — Report
+
+Render the chosen archetype template from `assets/templates/`, filling from state:
+
+```bash
+# Export bibliography in the user's preferred format
+python scripts/export_bibtex.py --state research_state.json --format bibtex --output refs.bib
+python scripts/export_bibtex.py --state research_state.json --format csl-json --output refs.json
+```
+
+The report body uses `[^id]` anchors (the paper id from state). The bibliography section at the bottom lists each cited paper with DOI/URL. Any claim missing an anchor must be removed or cited.
+
+**Save path convention:** `reports/<slug>_<YYYYMMDD>.md`. The skill does not write outside the working directory unless the user specifies a path.
+
+## Report archetype selection
+
+| Archetype | When to use | Primary output shape |
+|-----------|-------------|----------------------|
+| `literature_review` | User wants to know what's established about a topic | Thematic sections + synthesis + gap |
+| `systematic_review` | Narrow question, many studies, need rigorous comparison | PRISMA-lite flow + extraction table + pooled findings |
+| `scoping_review` | Broad topic, "what has been studied?" | Coverage map + methods inventory + research gap |
+| `comparative_analysis` | "A vs B" — methods, models, approaches | Axes of comparison + per-axis verdict + recommendation |
+| `grant_background` | Narrative for a proposal introduction | Problem significance + what's known + what's missing + why our approach |
+
+Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
+
+## Scripts reference
+
+| Script | Purpose |
+|--------|---------|
+| `research_state.py` | Init, read, write, query the state file. Central to every phase. |
+| `search_openalex.py` | Primary search (no key, 240M works, citation counts). |
+| `search_arxiv.py` | arXiv API — preprints and CS/ML/physics. |
+| `search_crossref.py` | Crossref REST — authoritative DOI metadata. |
+| `search_pubmed.py` | NCBI E-utilities — biomedical corpus with MeSH. |
+| `dedupe_papers.py` | DOI normalization + title similarity merging across sources. |
+| `rank_papers.py` | Transparent scoring formula. Prints the formula and per-paper components. |
+| `build_citation_graph.py` | Forward/backward snowballing via OpenAlex. |
+| `extract_pdf.py` | Full-text extraction (pypdf). Safe on scanned PDFs (skips, emits warning). |
+| `export_bibtex.py` | BibTeX / CSL-JSON / RIS export from state. |
+
+All scripts accept `--help`, read/write JSON, and use `research_state.json` as the single source of truth. Every script is idempotent on the state file.
+
+## State file schema (abbreviated)
+
+```json
+{
+  "schema_version": 1,
+  "question": "...",
+  "archetype": "literature_review",
+  "phase": 3,
+  "created_at": "...",
+  "updated_at": "...",
+  "queries": [{"source": "openalex", "query": "...", "hits": 42, "new": 30, "round": 1}],
+  "papers": {
+    "doi:10.1038/nature12373": {
+      "id": "doi:10.1038/nature12373",
+      "title": "...",
+      "authors": ["..."],
+      "year": 2013,
+      "venue": "Nature",
+      "citations": 523,
+      "abstract": "...",
+      "source": ["openalex", "crossref"],
+      "score": 0.81,
+      "score_components": {"relevance": 0.9, "citations": 0.8, "recency": 0.6, "venue": 1.0},
+      "selected": true,
+      "depth": "full",
+      "evidence": {"method": "...", "findings": ["..."], "limitations": "..."},
+      "discovered_via": "search"
+    }
+  },
+  "themes": [{"name": "...", "paper_ids": ["..."]}],
+  "tensions": [{"topic": "...", "sides": [{"position": "...", "paper_ids": ["..."]}]}],
+  "self_critique": {"findings": [], "resolved": [], "appendix": "..."},
+  "report_path": "reports/slug_20260411.md"
+}
+```
+
+See `scripts/research_state.py --help` for the full schema.
+
+## Completion gates
+
+Each phase has a gate. Do not advance until the gate passes.
+
+| Phase | Gate |
+|-------|------|
+| 0 → 1 | Question restated, archetype chosen, ≥3 keyword clusters, state initialized |
+| 1 → 2 | Saturation hit on primary source AND ≥3 sources consulted |
+| 2 → 3 | Top-N selected with score components recorded |
+| 3 → 4 | ≥80% of top-N have `depth: full` (rest explicitly marked `shallow`) |
+| 4 → 5 | Citation graph expanded ≥1 depth on top 5 seeds |
+| 5 → 6 | ≥3 themes defined, ≥1 tension documented (or explicit "no tensions found") |
+| 6 → 7 | Self-critique appendix written, all unanchored claims resolved |
+
+## Enrichment with MCP tools
+
+If the session has Semantic Scholar (asta) or Brave Search MCP tools available, use them as enrichment:
+
+- `mcp__asta__search_papers_by_relevance` — good for dense relevance ranking
+- `mcp__asta__get_citations` — lighter weight than citation graph for a few seed papers
+- `mcp__asta__snippet_search` — grep-like search across abstracts
+- Brave Search — non-academic sources (blog posts, press releases, pre-print discussion)
+
+**Treat MCP tools as unreliable by design** — they may timeout or be unavailable. Never place a phase-critical step behind an MCP call. Scripts are the spine; MCP is the skin.
+
+## Pitfalls (short list; see `references/pitfalls.md` for detail)
+
+1. **Treating the first page of search results as "the literature"** — run multiple keyword clusters and chase citations.
+2. **Unanchored claims** — every non-trivial statement in the report needs a `[^id]` pointing to a paper in state.
+3. **Confirmation bias** — actively search for critiques of top-cited papers; see Phase 4 special case.
+4. **Preprint conflation** — arXiv/bioRxiv are preprints; tag them as such in the report and weight evidence accordingly.
+5. **Venue monoculture** — if >60% of top-N come from one journal/venue, broaden sources.
+6. **Author monoculture** — same for a single lab or author.
+7. **Recency collapse** — the last 2 years matter for "state of the art" framings; check explicit coverage.
+8. **Stale MCP tool names** — MCP servers rename tools; always list available tools before assuming names. Script paths are stable; MCP names are not.
+9. **Single-shot search** — budget for ≥3 search rounds per cluster, not one.
+10. **Skipping self-critique** — the temptation to ship a clean draft is exactly when Phase 6 catches the most.
+
+## Example interaction
+
+```
+User: Give me a deep research report on CRISPR base editing for Duchenne muscular dystrophy.
+
+Agent:
+[Phase 0] Restating: "What is the current state and evidence for CRISPR base editing
+          as a therapeutic approach for Duchenne muscular dystrophy (DMD)?"
+          Archetype: literature_review (default; confirmed — broad overview requested)
+          Clusters:
+            - ("base editing" OR "adenine base editor" OR "cytosine base editor" OR ABE OR CBE)
+            - ("Duchenne muscular dystrophy" OR DMD OR dystrophin)
+            - (in vivo OR AAV OR "muscle delivery")
+          → research_state.json initialized
+
+[Phase 1] Running OpenAlex + PubMed + arXiv + Crossref across 3 clusters...
+          Round 1: 187 hits, 142 unique. Round 2: 94 hits, 31 new.
+          Saturation check: new=11%, max_new_citations=23 → SATURATED
+          143 unique papers in state.
+
+[Phase 2] Ranking with default weights (literature review)...
+          Top 20 selected. Score components written to state.
+
+[Phase 3] Fetching full text... 17/20 full, 3 abstract-only (flagged shallow).
+          Evidence extraction complete.
+
+[Phase 4] Citation chasing on top 8 seeds, depth 1.
+          Added 24 candidates, 6 re-scored into top 20.
+
+[Phase 5] Themes: (a) delivery platforms, (b) editing efficiency, (c) off-target/safety,
+          (d) pre-clinical outcomes, (e) clinical translation barriers.
+          Tensions: AAV serotype optimality (Theme a) — 3 papers disagree.
+
+[Phase 6] Self-critique flagged 2 single-source claims and a recency gap
+          (no 2025 paper in top 20). Re-ran focused search; added 4 papers.
+
+[Phase 7] Rendering literature_review template...
+          Report: reports/crispr-base-editing-dmd_20260411.md
+          Bibliography: reports/crispr-base-editing-dmd_20260411.bib (84 refs)
+```
+
+## References
+
+Modular documentation, loaded only when needed:
+
+- `references/search_strategies.md` — Boolean clusters, PICO, snowballing, saturation math
+- `references/source_selection.md` — which database for which question
+- `references/quality_assessment.md` — CRAAP, journal tier, retraction check, preprint handling
+- `references/report_templates.md` — the 5 archetypes with section-by-section guidance
+- `references/pitfalls.md` — long-form version of the pitfalls list with examples

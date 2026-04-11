@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.DS_Store
+research_state.json
+reports/
+*.bib
+*.tmp.json
+.search_payload.tmp.json

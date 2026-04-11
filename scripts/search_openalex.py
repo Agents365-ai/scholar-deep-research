@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""search_openalex.py — query the OpenAlex API.
+
+OpenAlex is the primary discovery source for scholar-deep-research:
+  - Free, no key required
+  - 240M+ scholarly works
+  - Cites/cited-by counts
+  - DOI and PDF URLs where available
+
+Polite pool: pass --email to identify yourself for higher rate limits.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from typing import Any
+
+import httpx
+
+from _common import (
+    USER_AGENT, make_paper, make_payload, emit, reconstruct_inverted_abstract,
+)
+
+API = "https://api.openalex.org/works"
+
+
+def search(query: str, limit: int, email: str | None,
+           year_from: int | None, year_to: int | None) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {
+        "search": query,
+        "per-page": min(limit, 200),
+        "select": ",".join([
+            "id", "doi", "title", "authorships", "publication_year",
+            "primary_location", "host_venue", "cited_by_count",
+            "abstract_inverted_index", "open_access",
+        ]),
+    }
+    filters = []
+    if year_from:
+        filters.append(f"from_publication_date:{year_from}-01-01")
+    if year_to:
+        filters.append(f"to_publication_date:{year_to}-12-31")
+    if filters:
+        params["filter"] = ",".join(filters)
+    if email:
+        params["mailto"] = email
+
+    headers = {"User-Agent": USER_AGENT}
+    if email:
+        headers["From"] = email
+
+    papers: list[dict[str, Any]] = []
+    cursor = "*"
+    fetched = 0
+    while fetched < limit:
+        params["cursor"] = cursor
+        params["per-page"] = min(limit - fetched, 200)
+        try:
+            r = httpx.get(API, params=params, headers=headers, timeout=30.0)
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            sys.stderr.write(f"openalex error: {e}\n")
+            break
+        data = r.json()
+        results = data.get("results", [])
+        if not results:
+            break
+        for w in results:
+            papers.append(_normalize(w))
+            fetched += 1
+            if fetched >= limit:
+                break
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
+            break
+    return papers
+
+
+def _normalize(w: dict[str, Any]) -> dict[str, Any]:
+    oa_id = (w.get("id") or "").rsplit("/", 1)[-1] or None
+    doi = w.get("doi")
+    if doi and isinstance(doi, str):
+        doi = doi.replace("https://doi.org/", "")
+    authors = [
+        a.get("author", {}).get("display_name")
+        for a in w.get("authorships", []) if a.get("author")
+    ]
+    venue = None
+    primary = w.get("primary_location") or {}
+    src = primary.get("source") or {}
+    venue = src.get("display_name")
+    if not venue and w.get("host_venue"):
+        venue = w["host_venue"].get("display_name")
+
+    pdf_url = None
+    if primary.get("pdf_url"):
+        pdf_url = primary["pdf_url"]
+    elif w.get("open_access", {}).get("oa_url"):
+        pdf_url = w["open_access"]["oa_url"]
+
+    landing = primary.get("landing_page_url")
+    return make_paper(
+        doi=doi,
+        title=w.get("title"),
+        authors=[a for a in authors if a],
+        year=w.get("publication_year"),
+        venue=venue,
+        abstract=reconstruct_inverted_abstract(w.get("abstract_inverted_index")),
+        citations=w.get("cited_by_count", 0),
+        url=landing or (f"https://doi.org/{doi}" if doi else None),
+        pdf_url=pdf_url,
+        openalex_id=oa_id,
+    )
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Search OpenAlex.")
+    p.add_argument("--query", required=True)
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--email", help="Polite pool email (recommended)")
+    p.add_argument("--year-from", type=int)
+    p.add_argument("--year-to", type=int)
+    p.add_argument("--round", type=int, default=1,
+                   help="Search round (used by saturation tracking)")
+    p.add_argument("--output", help="Write payload JSON to this path")
+    p.add_argument("--state", help="Ingest results into this state file")
+    args = p.parse_args()
+
+    papers = search(args.query, args.limit, args.email,
+                    args.year_from, args.year_to)
+    payload = make_payload("openalex", args.query, args.round, papers)
+    emit(payload, args.output, args.state)
+
+
+if __name__ == "__main__":
+    main()
