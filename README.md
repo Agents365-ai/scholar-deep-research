@@ -27,11 +27,12 @@ Works with all major AI coding agents that support the [Agent Skills](https://ag
 
 | Platform | Status | Details |
 |----------|--------|---------|
-| **Claude Code** | ✅ Full support | Native SKILL.md format |
-| **OpenClaw** | ✅ Full support | `metadata.openclaw` namespace, dependency gating |
-| **Hermes Agent** | ✅ Full support | `metadata.hermes` namespace, tags, category |
-| **OpenAI Codex** | 🟡 Compatible | SKILL.md works; `agents/openai.yaml` not yet shipped |
-| **SkillsMP** | ✅ Indexable | GitHub topics configured |
+| **[Claude Code](https://claude.ai/code)** | ✅ Full support | Native SKILL.md format |
+| **[OpenCode](https://opencode.ai/)** | ✅ Full support | Loads `SKILL.md` from `~/.config/opencode/skills/` or project `.opencode/skills/` |
+| **[OpenClaw](https://openclaw.ai/) / [ClawHub](https://clawhub.ai/)** | ✅ Full support | `metadata.openclaw` namespace, dependency gating, `clawhub install` |
+| **Hermes Agent** | ✅ Full support | `metadata.hermes` namespace, category: research |
+| **[pi-mono](https://github.com/badlogic/pi-mono)** | ✅ Full support | `metadata.pimo` namespace |
+| **[SkillsMP](https://skillsmp.com/)** | ✅ Indexable | GitHub topics configured |
 
 ## Comparison
 
@@ -115,9 +116,22 @@ git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.claude/sk
 git clone https://github.com/Agents365-ai/scholar-deep-research.git .claude/skills/scholar-deep-research
 ```
 
-### OpenClaw
+### OpenCode
 
 ```bash
+# Global install
+git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.config/opencode/skills/scholar-deep-research
+
+# Project-level install
+git clone https://github.com/Agents365-ai/scholar-deep-research.git .opencode/skills/scholar-deep-research
+```
+
+### OpenClaw / ClawHub
+
+```bash
+# Via ClawHub
+clawhub install scholar-deep-research
+
 # Manual install
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.openclaw/skills/scholar-deep-research
 
@@ -140,14 +154,10 @@ skills:
     - ~/myskills/scholar-deep-research
 ```
 
-### OpenAI Codex
+### pi-mono
 
 ```bash
-# User-level install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
-
-# Project-level install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skills/scholar-deep-research
+git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
 ```
 
 ### SkillsMP
@@ -161,9 +171,10 @@ skills install scholar-deep-research
 | Platform | Global path | Project path |
 |----------|-------------|--------------|
 | Claude Code | `~/.claude/skills/scholar-deep-research/` | `.claude/skills/scholar-deep-research/` |
-| OpenClaw | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
+| OpenCode | `~/.config/opencode/skills/scholar-deep-research/` | `.opencode/skills/scholar-deep-research/` |
+| OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
 | Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | Via `external_dirs` config |
-| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
+| pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
 | SkillsMP | N/A (installed via CLI) | N/A |
 
 ## Usage

@@ -27,11 +27,12 @@
 
 | 平台 | 支持状态 | 说明 |
 |------|----------|------|
-| **Claude Code** | ✅ 完全支持 | 原生 SKILL.md 格式 |
-| **OpenClaw** | ✅ 完全支持 | `metadata.openclaw` 命名空间，依赖检测 |
-| **Hermes Agent** | ✅ 完全支持 | `metadata.hermes` 命名空间、标签、分类 |
-| **OpenAI Codex** | 🟡 兼容 | SKILL.md 可用；`agents/openai.yaml` 暂未配套 |
-| **SkillsMP** | ✅ 可索引 | GitHub topics 已配置 |
+| **[Claude Code](https://claude.ai/code)** | ✅ 完全支持 | 原生 SKILL.md 格式 |
+| **[OpenCode](https://opencode.ai/)** | ✅ 完全支持 | 从 `~/.config/opencode/skills/` 或项目 `.opencode/skills/` 加载 SKILL.md |
+| **[OpenClaw](https://openclaw.ai/) / [ClawHub](https://clawhub.ai/)** | ✅ 完全支持 | `metadata.openclaw` 命名空间，依赖检测，`clawhub install` |
+| **Hermes Agent** | ✅ 完全支持 | `metadata.hermes` 命名空间，分类：research |
+| **[pi-mono](https://github.com/badlogic/pi-mono)** | ✅ 完全支持 | `metadata.pimo` 命名空间 |
+| **[SkillsMP](https://skillsmp.com/)** | ✅ 可索引 | GitHub topics 已配置 |
 
 ## 对比
 
@@ -115,9 +116,22 @@ git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.claude/sk
 git clone https://github.com/Agents365-ai/scholar-deep-research.git .claude/skills/scholar-deep-research
 ```
 
-### OpenClaw
+### OpenCode
 
 ```bash
+# 全局安装
+git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.config/opencode/skills/scholar-deep-research
+
+# 项目级安装
+git clone https://github.com/Agents365-ai/scholar-deep-research.git .opencode/skills/scholar-deep-research
+```
+
+### OpenClaw / ClawHub
+
+```bash
+# 通过 ClawHub
+clawhub install scholar-deep-research
+
 # 手动安装
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.openclaw/skills/scholar-deep-research
 
@@ -140,14 +154,10 @@ skills:
     - ~/myskills/scholar-deep-research
 ```
 
-### OpenAI Codex
+### pi-mono
 
 ```bash
-# 用户级安装
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
-
-# 项目级安装
-git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skills/scholar-deep-research
+git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
 ```
 
 ### SkillsMP
@@ -161,9 +171,10 @@ skills install scholar-deep-research
 | 平台 | 全局路径 | 项目路径 |
 |------|----------|----------|
 | Claude Code | `~/.claude/skills/scholar-deep-research/` | `.claude/skills/scholar-deep-research/` |
-| OpenClaw | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
+| OpenCode | `~/.config/opencode/skills/scholar-deep-research/` | `.opencode/skills/scholar-deep-research/` |
+| OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
 | Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | 通过 `external_dirs` 配置 |
-| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
+| pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
 | SkillsMP | 不适用（CLI 安装） | 不适用 |
 
 ## 使用方法
