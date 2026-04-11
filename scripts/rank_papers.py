@@ -19,14 +19,14 @@ cite its own ranking methodology in the appendix.
 from __future__ import annotations
 
 import argparse
-import json
 import math
+import os
 import re
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from _common import maybe_emit_schema, ok
 from research_state import load_state, save_state
 
 # Tier-1 venues. Conservative; users should extend per field.
@@ -89,7 +89,11 @@ def venue_prior(venue: str | None) -> float:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Rank papers in state.")
-    p.add_argument("--state", default="research_state.json")
+    p.add_argument(
+        "--state",
+        default=os.environ.get("SCHOLAR_STATE_PATH", "research_state.json"),
+        help="State file path (env: SCHOLAR_STATE_PATH)",
+    )
     p.add_argument("--question",
                    help="Override the question used for relevance "
                         "(default: state.question)")
@@ -101,6 +105,9 @@ def main() -> None:
                    help="Years until recency weight halves (default 5)")
     p.add_argument("--top", type=int, default=20,
                    help="Print top-N to stdout for inspection")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "rank_papers")
     args = p.parse_args()
 
     path = Path(args.state)
@@ -146,9 +153,13 @@ def main() -> None:
     ranked = sorted(state["papers"].values(),
                     key=lambda x: x.get("score", 0), reverse=True)
     top = ranked[: args.top]
-    print(json.dumps({
+    ok({
         "formula": formula,
         "ranked": len(state["papers"]),
+        "weights": {
+            "alpha": args.alpha, "beta": args.beta,
+            "gamma": args.gamma, "delta": args.delta,
+        },
         "top": [
             {
                 "id": p["id"],
@@ -161,7 +172,7 @@ def main() -> None:
             }
             for p in top
         ],
-    }, indent=2, ensure_ascii=False))
+    })
 
 
 if __name__ == "__main__":

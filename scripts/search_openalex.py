@@ -12,13 +12,14 @@ Polite pool: pass --email to identify yourself for higher rate limits.
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 from typing import Any
 
 import httpx
 
 from _common import (
-    USER_AGENT, make_paper, make_payload, emit, reconstruct_inverted_abstract,
+    USER_AGENT, UpstreamError, make_paper, make_payload, emit, err,
+    maybe_emit_schema, reconstruct_inverted_abstract,
 )
 
 API = "https://api.openalex.org/works"
@@ -59,8 +60,13 @@ def search(query: str, limit: int, email: str | None,
             r = httpx.get(API, params=params, headers=headers, timeout=30.0)
             r.raise_for_status()
         except httpx.HTTPError as e:
-            sys.stderr.write(f"openalex error: {e}\n")
-            break
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            raise UpstreamError(
+                "openalex",
+                f"{type(e).__name__}: {e}",
+                retryable=True,
+                status=status,
+            ) from e
         data = r.json()
         results = data.get("results", [])
         if not results:
@@ -117,17 +123,30 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Search OpenAlex.")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
-    p.add_argument("--email", help="Polite pool email (recommended)")
+    p.add_argument("--email",
+                   default=os.environ.get("SCHOLAR_MAILTO"),
+                   help="Polite pool email (env: SCHOLAR_MAILTO)")
     p.add_argument("--year-from", type=int)
     p.add_argument("--year-to", type=int)
     p.add_argument("--round", type=int, default=1,
                    help="Search round (used by saturation tracking)")
     p.add_argument("--output", help="Write payload JSON to this path")
-    p.add_argument("--state", help="Ingest results into this state file")
+    p.add_argument("--state",
+                   default=os.environ.get("SCHOLAR_STATE_PATH"),
+                   help="Ingest results into this state file "
+                        "(env: SCHOLAR_STATE_PATH)")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "search_openalex")
     args = p.parse_args()
 
-    papers = search(args.query, args.limit, args.email,
-                    args.year_from, args.year_to)
+    try:
+        papers = search(args.query, args.limit, args.email,
+                        args.year_from, args.year_to)
+    except UpstreamError as e:
+        err("upstream_error", e.message,
+            retryable=e.retryable, exit_code=e.exit_code,
+            source=e.source, status=e.status)
     payload = make_payload("openalex", args.query, args.round, papers)
     emit(payload, args.output, args.state)
 

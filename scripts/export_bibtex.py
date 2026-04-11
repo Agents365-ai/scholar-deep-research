@@ -15,12 +15,13 @@ significant title word — stable and human-readable.
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
+from _common import EXIT_VALIDATION, err, maybe_emit_schema, ok
 from research_state import load_state
 
 STOPWORDS = {"the", "a", "an", "of", "and", "in", "on", "for", "to", "with",
@@ -147,12 +148,19 @@ def to_ris(papers: list[dict[str, Any]]) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Export bibliography from state.")
-    p.add_argument("--state", default="research_state.json")
+    p.add_argument(
+        "--state",
+        default=os.environ.get("SCHOLAR_STATE_PATH", "research_state.json"),
+        help="State file path (env: SCHOLAR_STATE_PATH)",
+    )
     p.add_argument("--format", choices=["bibtex", "csl-json", "ris"],
                    default="bibtex")
     p.add_argument("--output", help="Write to file (default: stdout)")
     p.add_argument("--all", action="store_true",
                    help="Export all papers, not just selected ones")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "export_bibtex")
     args = p.parse_args()
 
     state = load_state(Path(args.state))
@@ -162,8 +170,10 @@ def main() -> None:
         papers = [state["papers"][pid] for pid in state["selected_ids"]
                   if pid in state["papers"]]
     if not papers:
-        sys.exit("error: no papers to export "
-                 "(use --all or run select first)")
+        err("no_papers",
+            "No papers to export. Pass --all or run `research_state.py "
+            "select` first.",
+            retryable=False, exit_code=EXIT_VALIDATION)
 
     if args.format == "bibtex":
         text = to_bibtex(papers)
@@ -176,9 +186,13 @@ def main() -> None:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text)
-        print(json.dumps({"ok": True, "output": str(out),
-                          "format": args.format, "count": len(papers)}))
+        ok({"output": str(out), "format": args.format, "count": len(papers)})
     else:
+        # No --output: write the raw bib/ris/csl text to stdout for pipe use
+        # (e.g. `export_bibtex.py --format bibtex > refs.bib`). This is the
+        # one command in the surface that does not emit an envelope on its
+        # default path — pipe compatibility is the reason. Agents should
+        # always pass --output to get a structured response.
         sys.stdout.write(text)
 
 

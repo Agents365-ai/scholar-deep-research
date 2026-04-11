@@ -16,7 +16,7 @@ papers will be re-merged, not duplicated.
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,7 +24,10 @@ from typing import Any
 
 import httpx
 
-from _common import USER_AGENT, make_paper, make_payload
+from _common import (
+    EXIT_VALIDATION, USER_AGENT, UpstreamError, command_signature, err,
+    make_paper, make_payload, maybe_emit_schema, ok, read_cache, write_cache,
+)
 from research_state import load_state, make_paper_id, save_state, now_iso
 
 WORKS = "https://api.openalex.org/works"
@@ -42,6 +45,9 @@ def fetch_work(oa_id: str, email: str | None) -> dict | None:
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError as e:
+        # Seed-level failures are non-fatal: log to stderr, skip that seed.
+        # The overall command still emits a success envelope with the seeds
+        # that did return. A per-seed failure summary is reported in `data`.
         sys.stderr.write(f"openalex fetch error for {oa_id}: {e}\n")
         return None
 
@@ -98,7 +104,11 @@ def normalize(w: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Build citation graph from state.")
-    p.add_argument("--state", default="research_state.json")
+    p.add_argument(
+        "--state",
+        default=os.environ.get("SCHOLAR_STATE_PATH", "research_state.json"),
+        help="State file path (env: SCHOLAR_STATE_PATH)",
+    )
     p.add_argument("--seed-top", type=int, default=8,
                    help="Number of top-ranked papers to use as seeds")
     p.add_argument("--direction", choices=["forward", "backward", "both"],
@@ -107,8 +117,45 @@ def main() -> None:
                    help="Currently only depth=1 supported")
     p.add_argument("--cited-by-limit", type=int, default=50,
                    help="Max cited-by results per seed")
-    p.add_argument("--email", help="Polite pool email")
+    p.add_argument("--email",
+                   default=os.environ.get("SCHOLAR_MAILTO"),
+                   help="Polite pool email (env: SCHOLAR_MAILTO)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Preview seeds and estimated request count, "
+                        "without making any HTTP calls or mutating state")
+    p.add_argument("--idempotency-key",
+                   help="If set, a retried run with the same key returns "
+                        "the cached response without re-hitting OpenAlex or "
+                        "re-mutating state. Cache dir: .scholar_cache/ "
+                        "(env: SCHOLAR_CACHE_DIR).")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "build_citation_graph")
     args = p.parse_args()
+
+    # Idempotency short-circuit: cache hit returns immediately, no network,
+    # no state mutation. Signature check catches accidental key reuse with
+    # different arguments — returns `idempotency_key_mismatch` rather than
+    # silently serving stale data.
+    if args.idempotency_key and not args.dry_run:
+        sig = command_signature(args, exclude=("email",))
+        cached = read_cache(args.idempotency_key)
+        if cached is not None:
+            if cached.get("signature") and cached["signature"] != sig:
+                err("idempotency_key_mismatch",
+                    f"Idempotency key '{args.idempotency_key}' was "
+                    f"previously used with different arguments. Use a new "
+                    f"key or flush the cache entry.",
+                    retryable=False, exit_code=EXIT_VALIDATION,
+                    key=args.idempotency_key,
+                    cached_signature=cached["signature"],
+                    current_signature=sig)
+            ok(cached["response"], meta={
+                "cache_hit": True,
+                "idempotency_key": args.idempotency_key,
+                "cached_at": cached.get("cached_at"),
+            })
+            return
 
     path = Path(args.state)
     state = load_state(path)
@@ -123,15 +170,43 @@ def main() -> None:
                        reverse=True)[: args.seed_top]
 
     if not seeds:
-        sys.exit("error: no seed papers (run rank_papers.py and select first)")
+        err("no_seeds",
+            "No seed papers. Run rank_papers.py and `research_state.py "
+            "select` first.",
+            retryable=False, exit_code=EXIT_VALIDATION)
+
+    seeds_with_oa = [s for s in seeds if s.get("openalex_id")]
+    skipped_seeds = [s["id"] for s in seeds if not s.get("openalex_id")]
+
+    if args.dry_run:
+        # Each backward seed costs 1 metadata GET + ~1 batch GET per ~25 refs.
+        # We don't know ref counts without fetching, so estimate 2 req/seed.
+        # Each forward seed costs 1 cited-by page (--cited-by-limit).
+        backward_req = 2 * len(seeds_with_oa) if args.direction in ("backward", "both") else 0
+        forward_req = len(seeds_with_oa) if args.direction in ("forward", "both") else 0
+        ok({
+            "dry_run": True,
+            "would_fetch": {
+                "seeds": len(seeds_with_oa),
+                "skipped_seeds_without_openalex_id": skipped_seeds,
+                "direction": args.direction,
+                "cited_by_limit": args.cited_by_limit,
+                "estimated_requests": backward_req + forward_req,
+                "breakdown": {
+                    "backward_req_estimate": backward_req,
+                    "forward_req_estimate": forward_req,
+                },
+                "seed_ids": [s["id"] for s in seeds_with_oa],
+                "note": "Backward estimate assumes ~1 metadata GET + ~1 batch "
+                        "GET per seed; actual count depends on reference counts.",
+            },
+        })
+        return
 
     new_records: list[dict[str, Any]] = []
 
-    for seed in seeds:
-        oa_id = seed.get("openalex_id")
-        if not oa_id:
-            sys.stderr.write(f"skipping seed without openalex_id: {seed['id']}\n")
-            continue
+    for seed in seeds_with_oa:
+        oa_id = seed["openalex_id"]
 
         if args.direction in ("backward", "both"):
             full = fetch_work(oa_id, args.email)
@@ -181,14 +256,26 @@ def main() -> None:
     })
     save_state(path, state)
 
-    print(json.dumps({
-        "ok": True,
+    response = {
         "seeds": len(seeds),
+        "seeds_used": len(seeds_with_oa),
+        "skipped_seeds_without_openalex_id": skipped_seeds,
+        "direction": args.direction,
         "fetched": len(new_records),
         "added": added,
         "merged": merged,
         "total_papers": len(state["papers"]),
-    }))
+    }
+
+    if args.idempotency_key:
+        sig = command_signature(args, exclude=("email",))
+        write_cache(args.idempotency_key, response, signature=sig)
+        ok(response, meta={
+            "cache_hit": False,
+            "idempotency_key": args.idempotency_key,
+        })
+    else:
+        ok(response)
 
 
 if __name__ == "__main__":

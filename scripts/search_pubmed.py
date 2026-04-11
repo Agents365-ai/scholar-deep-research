@@ -5,29 +5,32 @@ Two-step protocol:
   1. esearch.fcgi → list of PMIDs matching the query
   2. esummary.fcgi → metadata for those PMIDs
 
-For full abstracts use efetch (rettype=abstract). We fetch summaries by default
-to keep the round-trip small; abstracts are pulled in Phase 3 deep-read.
+Abstracts are NOT returned by search — esummary doesn't include them, and
+attempting to parse efetch's loosely-structured text response here produced
+too many false splits. Abstracts are pulled per-paper during Phase 3
+(deep-read) via extract_pdf.py or a targeted efetch call.
 
-API key: optional but recommended (--api-key) for higher rate limits.
+API key: optional but recommended (env: NCBI_API_KEY) for higher rate limits.
 """
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 from typing import Any
 
 import httpx
 
-from _common import USER_AGENT, make_paper, make_payload, emit
+from _common import (
+    USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
+    maybe_emit_schema,
+)
 
 ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
 
 def search(query: str, limit: int, api_key: str | None,
-           year_from: int | None, year_to: int | None,
-           with_abstracts: bool) -> list[dict]:
+           year_from: int | None, year_to: int | None) -> list[dict]:
     term = query
     if year_from or year_to:
         a = year_from or 1900
@@ -49,8 +52,11 @@ def search(query: str, limit: int, api_key: str | None,
         r = httpx.get(ESEARCH, params=es_params, headers=headers, timeout=30.0)
         r.raise_for_status()
     except httpx.HTTPError as e:
-        sys.stderr.write(f"pubmed esearch error: {e}\n")
-        return []
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        raise UpstreamError(
+            "pubmed", f"esearch: {type(e).__name__}: {e}",
+            retryable=True, status=status,
+        ) from e
     pmids = r.json().get("esearchresult", {}).get("idlist", [])
     if not pmids:
         return []
@@ -66,46 +72,24 @@ def search(query: str, limit: int, api_key: str | None,
         r = httpx.get(ESUMMARY, params=sum_params, headers=headers, timeout=30.0)
         r.raise_for_status()
     except httpx.HTTPError as e:
-        sys.stderr.write(f"pubmed esummary error: {e}\n")
-        return []
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        raise UpstreamError(
+            "pubmed", f"esummary: {type(e).__name__}: {e}",
+            retryable=True, status=status,
+        ) from e
     result = r.json().get("result", {})
-
-    abstracts: dict[str, str] = {}
-    if with_abstracts:
-        abstracts = _fetch_abstracts(pmids, api_key, headers)
 
     papers = []
     for pmid in pmids:
         rec = result.get(pmid)
         if not rec:
             continue
-        papers.append(_normalize(rec, pmid, abstracts.get(pmid)))
+        papers.append(_normalize(rec, pmid, abstract=None))
     return papers
 
 
-def _fetch_abstracts(pmids: list[str], api_key: str | None,
-                     headers: dict[str, str]) -> dict[str, str]:
-    params: dict[str, Any] = {
-        "db": "pubmed",
-        "id": ",".join(pmids),
-        "rettype": "abstract",
-        "retmode": "text",
-    }
-    if api_key:
-        params["api_key"] = api_key
-    try:
-        r = httpx.get(EFETCH, params=params, headers=headers, timeout=60.0)
-        r.raise_for_status()
-    except httpx.HTTPError as e:
-        sys.stderr.write(f"pubmed efetch error: {e}\n")
-        return {}
-    # The text response is loosely structured. We won't try to perfectly split
-    # it; agent can re-fetch one at a time later if needed.
-    return {}
-
-
 def _normalize(rec: dict[str, Any], pmid: str,
-               abstract: str | None) -> dict[str, Any]:
+               abstract: str | None = None) -> dict[str, Any]:
     authors = [a.get("name") for a in rec.get("authors", []) if a.get("name")]
     year = None
     pubdate = rec.get("pubdate") or ""
@@ -136,18 +120,29 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Search PubMed.")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
-    p.add_argument("--api-key", help="NCBI API key (optional)")
+    p.add_argument("--api-key",
+                   default=os.environ.get("NCBI_API_KEY"),
+                   help="NCBI API key (env: NCBI_API_KEY)")
     p.add_argument("--year-from", type=int)
     p.add_argument("--year-to", type=int)
-    p.add_argument("--with-abstracts", action="store_true",
-                   help="Also fetch abstracts via efetch (slower)")
     p.add_argument("--round", type=int, default=1)
     p.add_argument("--output")
-    p.add_argument("--state")
+    p.add_argument("--state",
+                   default=os.environ.get("SCHOLAR_STATE_PATH"),
+                   help="Ingest results into this state file "
+                        "(env: SCHOLAR_STATE_PATH)")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "search_pubmed")
     args = p.parse_args()
 
-    papers = search(args.query, args.limit, args.api_key,
-                    args.year_from, args.year_to, args.with_abstracts)
+    try:
+        papers = search(args.query, args.limit, args.api_key,
+                        args.year_from, args.year_to)
+    except UpstreamError as e:
+        err("upstream_error", e.message,
+            retryable=e.retryable, exit_code=e.exit_code,
+            source=e.source, status=e.status)
     payload = make_payload("pubmed", args.query, args.round, papers)
     emit(payload, args.output, args.state)
 

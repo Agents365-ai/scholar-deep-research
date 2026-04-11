@@ -18,12 +18,12 @@ the same result.
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
+from _common import maybe_emit_schema, ok
 from research_state import load_state, save_state, normalize_title
 
 
@@ -81,9 +81,16 @@ def merge(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Deduplicate papers in state.")
-    p.add_argument("--state", default="research_state.json")
+    p.add_argument(
+        "--state",
+        default=os.environ.get("SCHOLAR_STATE_PATH", "research_state.json"),
+        help="State file path (env: SCHOLAR_STATE_PATH)",
+    )
     p.add_argument("--dry-run", action="store_true",
                    help="Print clusters without modifying state")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "dedupe_papers")
     args = p.parse_args()
 
     path = Path(args.state)
@@ -96,13 +103,13 @@ def main() -> None:
 
     duplicates = {k: v for k, v in clusters.items() if len(v) > 1}
     if args.dry_run:
-        json.dump(
-            {"duplicate_clusters": len(duplicates),
-             "clusters": [{"key": k, "ids": [r["id"] for r in v]}
-                          for k, v in duplicates.items()]},
-            sys.stdout, indent=2,
-        )
-        sys.stdout.write("\n")
+        ok({
+            "dry_run": True,
+            "total_papers": len(papers),
+            "duplicate_clusters": len(duplicates),
+            "clusters": [{"key": k, "ids": [r["id"] for r in v]}
+                         for k, v in duplicates.items()],
+        })
         return
 
     # Build new papers dict from merged clusters
@@ -123,12 +130,11 @@ def main() -> None:
 
     state["papers"] = new_papers
     save_state(path, state)
-    print(json.dumps({
-        "ok": True,
+    ok({
         "before": len(papers),
         "after": len(new_papers),
         "merged_clusters": merged_count,
-    }))
+    })
 
 
 if __name__ == "__main__":

@@ -16,15 +16,21 @@ The script never crashes the pipeline — it always exits 0 with a JSON status.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import tempfile
 from pathlib import Path
 
+from _common import (
+    EXIT_RUNTIME, EXIT_UPSTREAM, EXIT_VALIDATION, err, maybe_emit_schema, ok,
+)
+
 try:
     from pypdf import PdfReader
 except ImportError:
-    sys.exit("error: pypdf not installed. Run: pip install pypdf")
+    err("missing_dependency",
+        "pypdf not installed. Run: pip install pypdf",
+        retryable=False, exit_code=EXIT_RUNTIME,
+        dependency="pypdf")
 
 
 def parse_pages(spec: str | None, total: int) -> list[int]:
@@ -71,6 +77,9 @@ def main() -> None:
     src.add_argument("--url", help="URL to download then extract")
     p.add_argument("--output", help="Write extracted text to this path")
     p.add_argument("--pages", help="Page range, e.g. 1-5,8,10-12")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "extract_pdf")
     args = p.parse_args()
 
     if args.url:
@@ -80,8 +89,11 @@ def main() -> None:
                           headers={"User-Agent": "scholar-deep-research/0.1"})
             r.raise_for_status()
         except httpx.HTTPError as e:
-            print(json.dumps({"ok": False, "error": f"download failed: {e}"}))
-            return
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            err("download_failed",
+                f"Failed to download {args.url}: {type(e).__name__}: {e}",
+                retryable=True, exit_code=EXIT_UPSTREAM,
+                url=args.url, status=status)
         tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
         tmp.write(r.content)
         tmp.close()
@@ -89,16 +101,20 @@ def main() -> None:
     else:
         pdf_path = Path(args.input)
         if not pdf_path.exists():
-            print(json.dumps({"ok": False, "error": f"not found: {pdf_path}"}))
-            return
+            err("file_not_found",
+                f"PDF not found: {pdf_path}",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                path=str(pdf_path))
 
     try:
         reader = PdfReader(str(pdf_path))
         page_indices = parse_pages(args.pages, len(reader.pages))
         text, meta = extract(pdf_path, page_indices)
     except Exception as e:
-        print(json.dumps({"ok": False, "error": f"pypdf failure: {e}"}))
-        return
+        err("pypdf_failure",
+            f"pypdf failed to read {pdf_path}: {type(e).__name__}: {e}",
+            retryable=False, exit_code=EXIT_RUNTIME,
+            path=str(pdf_path))
 
     if args.output:
         out = Path(args.output)
@@ -108,7 +124,7 @@ def main() -> None:
     else:
         meta["text_preview"] = text[:500]
 
-    print(json.dumps({"ok": True, **meta}, indent=2, ensure_ascii=False))
+    ok(meta)
 
 
 if __name__ == "__main__":

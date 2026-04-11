@@ -11,12 +11,15 @@ should treat that as a flag to weight evidence accordingly.
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 import xml.etree.ElementTree as ET
 
 import httpx
 
-from _common import USER_AGENT, make_paper, make_payload, emit
+from _common import (
+    USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
+    maybe_emit_schema,
+)
 
 API = "http://export.arxiv.org/api/query"
 NS = {
@@ -38,10 +41,20 @@ def search(query: str, limit: int) -> list[dict]:
                       headers={"User-Agent": USER_AGENT}, timeout=30.0)
         r.raise_for_status()
     except httpx.HTTPError as e:
-        sys.stderr.write(f"arxiv error: {e}\n")
-        return []
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        raise UpstreamError(
+            "arxiv", f"{type(e).__name__}: {e}",
+            retryable=True, status=status,
+        ) from e
 
-    root = ET.fromstring(r.text)
+    try:
+        root = ET.fromstring(r.text)
+    except ET.ParseError as e:
+        raise UpstreamError(
+            "arxiv", f"malformed Atom response: {e}",
+            retryable=True,
+        ) from e
+
     papers = []
     for entry in root.findall("atom:entry", NS):
         papers.append(_normalize(entry))
@@ -99,10 +112,21 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--round", type=int, default=1)
     p.add_argument("--output")
-    p.add_argument("--state")
+    p.add_argument("--state",
+                   default=os.environ.get("SCHOLAR_STATE_PATH"),
+                   help="Ingest results into this state file "
+                        "(env: SCHOLAR_STATE_PATH)")
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
+    maybe_emit_schema(p, "search_arxiv")
     args = p.parse_args()
 
-    papers = search(args.query, args.limit)
+    try:
+        papers = search(args.query, args.limit)
+    except UpstreamError as e:
+        err("upstream_error", e.message,
+            retryable=e.retryable, exit_code=e.exit_code,
+            source=e.source, status=e.status)
     payload = make_payload("arxiv", args.query, args.round, papers)
     emit(payload, args.output, args.state)
 

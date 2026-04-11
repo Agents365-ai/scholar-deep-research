@@ -5,7 +5,7 @@ license: MIT
 homepage: https://github.com/Agents365-ai/scholar-deep-research
 compatibility: Requires Python 3.9+ with httpx and pypdf (see requirements.txt). Works offline-first (no MCP required) but enriches with Semantic Scholar / Brave MCP tools when available.
 platforms: [macos, linux, windows]
-metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.1.0"}
+metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.2.0"}
 ---
 
 # Scholar Deep Research
@@ -95,12 +95,14 @@ python scripts/dedupe_papers.py --state research_state.json
 
 **MCP enrichment (optional, run if available):** call `mcp__asta__search_papers_by_relevance` and `mcp__asta__snippet_search` and feed results via `scripts/research_state.py ingest`. If the MCP call errors or times out, do not retry — move on.
 
-**Iterate.** Read the state file. Are there keyword gaps? Are there authors appearing 3+ times whose other work you haven't pulled? Run another round. Stop when saturation hits:
+**Iterate.** Read the state file. Are there keyword gaps? Are there authors appearing 3+ times whose other work you haven't pulled? Run another round. Stop when saturation hits — **every source, not just the last one queried:**
 
 ```bash
 python scripts/research_state.py saturation --state research_state.json
-# Prints: new_in_last_round=12%, max_citations_new=34 → SATURATED
+# Returns { "per_source": {...}, "overall_saturated": true/false, ... }
 ```
+
+`overall_saturated` is true only when every queried source has run at least `--min-rounds` (default 2) rounds AND each is individually below the new-paper percentage and new-citation thresholds. A source that has been queried only once cannot be declared saturated, which rules out the failure mode where a single quiet source falsely ends discovery. Use `--source openalex` to check one source in isolation.
 
 ### Phase 2 — Triage
 
@@ -151,14 +153,21 @@ For each paper in the top-N: get the best available full text, extract evidence,
 Take the top 5-10 highest-ranked papers and expand the graph.
 
 ```bash
+# Preview the request count first — this is the most expensive command
 python scripts/build_citation_graph.py \
   --state research_state.json \
-  --seed-top 8 \
-  --direction both \
-  --depth 1
+  --seed-top 8 --direction both --depth 1 --dry-run
+
+# Run with an idempotency key so a retry after a network blip is free
+python scripts/build_citation_graph.py \
+  --state research_state.json \
+  --seed-top 8 --direction both --depth 1 \
+  --idempotency-key "chase-$(date -u +%Y%m%dT%H%M)"
 ```
 
 The script pulls backward references (what did this paper cite?) and forward citations (who cited this paper?), deduplicates against existing state, and writes new candidate papers with `discovered_via: citation_chase`. Run rank + deep read again on any new high-scoring additions.
+
+**Idempotency.** When `--idempotency-key <k>` is set, the first successful run writes `{response, signature}` to `.scholar_cache/<hash>.json`. A retried run with the same key replays the cached response without re-hitting OpenAlex or re-mutating state. Reusing the same key with different arguments returns `idempotency_key_mismatch` rather than silently serving stale data. Cache directory: `SCHOLAR_CACHE_DIR` env var, default `.scholar_cache/`.
 
 **Special case — a highly cited paper has never been challenged.** If rank says a paper is top-3 by citations but no critiques appear in the corpus, search explicitly for `"<first author> <year>" critique OR limitations OR reanalysis OR failed replication`. This is the confirmation-bias backstop.
 
@@ -227,7 +236,63 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 | `extract_pdf.py` | Full-text extraction (pypdf). Safe on scanned PDFs (skips, emits warning). |
 | `export_bibtex.py` | BibTeX / CSL-JSON / RIS export from state. |
 
-All scripts accept `--help`, read/write JSON, and use `research_state.json` as the single source of truth. Every script is idempotent on the state file.
+All scripts accept `--help`, `--schema`, emit a structured JSON envelope on stdout, and use `research_state.json` as the single source of truth. Every script is idempotent on the state file (network-layer idempotency is P1 work).
+
+### CLI contract
+
+Every script prints exactly one JSON envelope to stdout and exits with a code from the stable vocabulary below. No prose is ever mixed into stdout; diagnostics go to stderr.
+
+**Success envelope:**
+
+```json
+{ "ok": true, "data": { ... } }
+```
+
+**Failure envelope:**
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "snake_case_routing_key",
+    "message": "human sentence",
+    "retryable": true,
+    "...extra context fields...": "..."
+  }
+}
+```
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | success |
+| `1` | runtime error (e.g. malformed upstream response, missing dependency) |
+| `2` | upstream / network error (retryable) |
+| `3` | validation error (bad input) |
+| `4` | state error (missing, corrupt, or schema mismatch) |
+
+**Schema introspection.** Every script supports `--schema`, which prints its full parameter schema (types, defaults, choices, required flags, subcommands where applicable) as JSON and exits 0. An agent discovering an unfamiliar script should run `--schema` before `--help` — it is machine-parseable and covers everything `--help` does.
+
+```bash
+python scripts/search_openalex.py --schema
+python scripts/research_state.py --schema   # includes every subcommand
+```
+
+**Export bibliography exception.** `export_bibtex.py` without `--output` writes raw BibTeX/RIS/CSL text to stdout for pipe compatibility (`export_bibtex.py --format bibtex > refs.bib`). Agents that need a structured response should always pass `--output` — that path returns `{"ok": true, "data": {"output": "...", "format": "bibtex", "count": N}}`.
+
+### Environment variables
+
+Trust-boundary configuration — set once by the human or orchestrator. CLI flags override where present.
+
+| Variable | Used by | Purpose |
+|----------|---------|---------|
+| `SCHOLAR_STATE_PATH` | every script that takes `--state` | Default path to `research_state.json` |
+| `SCHOLAR_MAILTO` | `search_openalex.py`, `search_crossref.py`, `build_citation_graph.py` | Polite-pool email for OpenAlex / Crossref — higher rate limits |
+| `NCBI_API_KEY` | `search_pubmed.py` | NCBI E-utilities API key — higher rate limits |
+| `SCHOLAR_CACHE_DIR` | `build_citation_graph.py` (any command that takes `--idempotency-key`) | Cache directory for idempotent-retry responses; default `.scholar_cache/` in cwd |
+
+Agents should never set these themselves. They belong in the shell profile, a systemd unit, or the orchestrator's env injection.
 
 ## State file schema (abbreviated)
 

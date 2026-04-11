@@ -44,13 +44,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from _common import (
+    EXIT_STATE, EXIT_VALIDATION, err, maybe_emit_schema, ok,
+)
+
 SCHEMA_VERSION = 1
+
+# Whitelist of fields `set` is permitted to write. `papers`, `queries`,
+# `self_critique`, and everything else must be mutated through the dedicated
+# commands so an agent cannot silently wipe the corpus via `set --field papers`.
+SETTABLE_FIELDS = {"phase", "archetype", "report_path"}
 
 
 # ---------- IO ----------
@@ -61,9 +71,18 @@ def now_iso() -> str:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        sys.exit(f"error: state file not found: {path}\n"
-                 f"hint: run `research_state.py init --question ...` first")
-    return json.loads(path.read_text())
+        err("state_not_found",
+            f"State file not found: {path}. "
+            f"Run `research_state.py init --question ...` first.",
+            retryable=False, exit_code=EXIT_STATE,
+            path=str(path))
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        err("state_corrupt",
+            f"State file {path} is not valid JSON: {e}",
+            retryable=False, exit_code=EXIT_STATE,
+            path=str(path))
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
@@ -114,7 +133,10 @@ def make_paper_id(paper: dict[str, Any]) -> str:
 def cmd_init(args: argparse.Namespace) -> None:
     path = Path(args.state)
     if path.exists() and not args.force:
-        sys.exit(f"error: {path} already exists. Use --force to overwrite.")
+        err("state_exists",
+            f"{path} already exists. Pass --force to overwrite.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            path=str(path))
     state = {
         "schema_version": SCHEMA_VERSION,
         "question": args.question,
@@ -131,7 +153,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "report_path": None,
     }
     save_state(path, state)
-    print(json.dumps({"ok": True, "state": str(path), "phase": 0}))
+    ok({"state": str(path), "phase": 0, "schema_version": SCHEMA_VERSION})
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -183,13 +205,15 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         "timestamp": now_iso(),
     })
     save_state(Path(args.state), state)
-    print(json.dumps({
-        "ok": True,
+    ok({
+        "source": source,
+        "query": query,
+        "round": rnd,
         "ingested": len(incoming),
         "new": new_count,
         "merged": merged_count,
         "total_papers": len(state["papers"]),
-    }))
+    })
 
 
 def cmd_select(args: argparse.Namespace) -> None:
@@ -206,44 +230,106 @@ def cmd_select(args: argparse.Namespace) -> None:
         p["selected"] = pid in chosen_ids
     state["selected_ids"] = chosen_ids
     save_state(Path(args.state), state)
-    print(json.dumps({
-        "ok": True,
-        "selected": len(chosen_ids),
-        "ids": chosen_ids,
-    }))
+    ok({"selected": len(chosen_ids), "ids": chosen_ids})
 
 
 def cmd_saturation(args: argparse.Namespace) -> None:
-    """Check whether the latest round saturated discovery.
+    """Check whether discovery has saturated, evaluated per source.
 
-    Saturated when:
-      - last round's `new` count is < threshold% of last round's `hits`, AND
-      - no new paper in the last round has > max_citations citations.
+    A single source is saturated when ALL of:
+      - it has been queried at least `--min-rounds` times (default 2), AND
+      - its last round's `new` count is < `--threshold`% of its last round's
+        `hits`, AND
+      - no paper first seen in that last round (and linked to this source)
+        has more than `--max-citations` citations.
+
+    `overall_saturated` is True only when every queried source individually
+    satisfies the rule — the gate that P1 #10 from the review targets.
+
+    The old single-source check was broken for multi-source discovery: it
+    read only `queries[-1]` and would fire "saturated" after one quiet
+    source even when others were still producing new papers.
     """
     state = load_state(Path(args.state))
     if not state["queries"]:
-        sys.exit("error: no queries recorded yet")
-    last = state["queries"][-1]
-    pct_new = (last["new"] / last["hits"] * 100) if last["hits"] else 0
-    # check max citations among papers first seen in this round
-    max_cit = 0
-    for p in state["papers"].values():
-        if p.get("first_seen_round") == last["round"]:
-            max_cit = max(max_cit, p.get("citations", 0) or 0)
-    saturated = pct_new < args.threshold and max_cit < args.max_citations
-    print(json.dumps({
-        "round": last["round"],
-        "source": last["source"],
-        "new_pct": round(pct_new, 1),
-        "max_new_citations": max_cit,
+        err("no_queries",
+            "No queries recorded yet. Run a search first.",
+            retryable=False, exit_code=EXIT_VALIDATION)
+
+    # Group queries by source, preserving insertion order within each bucket.
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for q in state["queries"]:
+        by_source.setdefault(q["source"], []).append(q)
+
+    if args.source:
+        if args.source not in by_source:
+            err("source_not_queried",
+                f"Source '{args.source}' has no queries in state.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.source,
+                available=sorted(by_source.keys()))
+        by_source = {args.source: by_source[args.source]}
+
+    per_source: dict[str, dict[str, Any]] = {}
+    for source, queries in by_source.items():
+        last = queries[-1]
+        rounds_run = len(queries)
+        hits = last.get("hits", 0) or 0
+        new = last.get("new", 0) or 0
+        pct_new = (new / hits * 100) if hits else 0.0
+        # Max citations among papers linked to this source that were first
+        # seen globally in the same round number as this source's last round.
+        # This is an approximation — the `round` field in query entries is
+        # not strictly per-source — but paired with the `source in p.source`
+        # filter it's correct whenever rounds don't alias across sources.
+        max_cit = 0
+        for p in state["papers"].values():
+            if (p.get("first_seen_round") == last["round"]
+                    and source in (p.get("source") or [])):
+                max_cit = max(max_cit, p.get("citations") or 0)
+        saturated = (
+            rounds_run >= args.min_rounds
+            and pct_new < args.threshold
+            and max_cit < args.max_citations
+        )
+        per_source[source] = {
+            "rounds_run": rounds_run,
+            "last_round": last["round"],
+            "last_query": last.get("query", ""),
+            "hits_last_round": hits,
+            "new_last_round": new,
+            "new_pct": round(pct_new, 1),
+            "max_new_citations": max_cit,
+            "saturated": saturated,
+        }
+
+    overall_saturated = bool(per_source) and all(
+        ps["saturated"] for ps in per_source.values()
+    )
+    ok({
+        "per_source": per_source,
+        "overall_saturated": overall_saturated,
         "threshold_pct": args.threshold,
         "max_citations_threshold": args.max_citations,
-        "saturated": saturated,
-    }))
+        "min_rounds": args.min_rounds,
+    })
 
 
 def cmd_set(args: argparse.Namespace) -> None:
-    """Set a top-level state field. Used for phase advance, archetype change, etc."""
+    """Set a whitelisted top-level state field (phase, archetype, report_path).
+
+    Collection fields (`papers`, `queries`, `themes`, `tensions`,
+    `self_critique`) are NOT settable through this command — use the dedicated
+    subcommands (`ingest`, `theme`, `tension`, `critique`, etc). This prevents
+    an agent from silently wiping the corpus via `set --field papers`.
+    """
+    if args.field not in SETTABLE_FIELDS:
+        err("field_not_settable",
+            f"Field '{args.field}' is not settable via `set`. "
+            f"Use the dedicated subcommand for collection fields.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            field=args.field,
+            allowed=sorted(SETTABLE_FIELDS))
     state = load_state(Path(args.state))
     try:
         value = json.loads(args.value)
@@ -251,14 +337,18 @@ def cmd_set(args: argparse.Namespace) -> None:
         value = args.value
     state[args.field] = value
     save_state(Path(args.state), state)
-    print(json.dumps({"ok": True, "field": args.field, "value": value}))
+    ok({"field": args.field, "value": value})
 
 
 def cmd_query(args: argparse.Namespace) -> None:
-    """Read a slice of state for inspection."""
+    """Read a slice of state for inspection.
+
+    All read slices return an enveloped response. List slices carry a `count`
+    field so the agent does not need a follow-up call to count items.
+    """
     state = load_state(Path(args.state))
     if args.what == "summary":
-        out = {
+        ok({
             "question": state["question"],
             "archetype": state["archetype"],
             "phase": state["phase"],
@@ -268,30 +358,39 @@ def cmd_query(args: argparse.Namespace) -> None:
             "themes": len(state["themes"]),
             "tensions": len(state["tensions"]),
             "report_path": state.get("report_path"),
-        }
-    elif args.what == "selected":
-        out = [state["papers"][pid] for pid in state["selected_ids"]
-               if pid in state["papers"]]
+        })
+        return
+    if args.what == "selected":
+        items = [state["papers"][pid] for pid in state["selected_ids"]
+                 if pid in state["papers"]]
     elif args.what == "papers":
-        out = list(state["papers"].values())
+        items = list(state["papers"].values())
     elif args.what == "queries":
-        out = state["queries"]
+        items = state["queries"]
     elif args.what == "themes":
-        out = state["themes"]
+        items = state["themes"]
     elif args.what == "tensions":
-        out = state["tensions"]
+        items = state["tensions"]
     elif args.what == "critique":
-        out = state.get("self_critique", {})
+        ok(state.get("self_critique",
+                     {"findings": [], "resolved": [], "appendix": ""}))
+        return
     else:
-        sys.exit(f"unknown query: {args.what}")
-    print(json.dumps(out, indent=2, ensure_ascii=False))
+        err("unknown_query",
+            f"Unknown query target: {args.what}",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            what=args.what)
+    ok(items, count=len(items), has_more=False)
 
 
 def cmd_evidence(args: argparse.Namespace) -> None:
     """Attach evidence (extracted reading) to a paper."""
     state = load_state(Path(args.state))
     if args.id not in state["papers"]:
-        sys.exit(f"unknown paper id: {args.id}")
+        err("unknown_paper_id",
+            f"No paper in state with id '{args.id}'.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            id=args.id)
     paper = state["papers"][args.id]
     paper["evidence"] = {
         "method": args.method,
@@ -301,7 +400,7 @@ def cmd_evidence(args: argparse.Namespace) -> None:
     }
     paper["depth"] = args.depth
     save_state(Path(args.state), state)
-    print(json.dumps({"ok": True, "id": args.id, "depth": args.depth}))
+    ok({"id": args.id, "depth": args.depth})
 
 
 def cmd_theme(args: argparse.Namespace) -> None:
@@ -312,17 +411,24 @@ def cmd_theme(args: argparse.Namespace) -> None:
         "paper_ids": args.paper_ids or [],
     })
     save_state(Path(args.state), state)
-    print(json.dumps({"ok": True, "theme": args.name}))
+    ok({"theme": args.name, "total_themes": len(state["themes"])})
 
 
 def cmd_tension(args: argparse.Namespace) -> None:
     state = load_state(Path(args.state))
+    try:
+        sides = json.loads(args.sides)
+    except json.JSONDecodeError as e:
+        err("invalid_json",
+            f"--sides is not valid JSON: {e}",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            field="sides")
     state["tensions"].append({
         "topic": args.topic,
-        "sides": json.loads(args.sides),
+        "sides": sides,
     })
     save_state(Path(args.state), state)
-    print(json.dumps({"ok": True, "topic": args.topic}))
+    ok({"topic": args.topic, "total_tensions": len(state["tensions"])})
 
 
 def cmd_critique(args: argparse.Namespace) -> None:
@@ -336,7 +442,7 @@ def cmd_critique(args: argparse.Namespace) -> None:
     if args.appendix:
         crit["appendix"] = args.appendix
     save_state(Path(args.state), state)
-    print(json.dumps({"ok": True, "critique": crit}))
+    ok({"critique": crit})
 
 
 # ---------- CLI ----------
@@ -346,8 +452,14 @@ def build_parser() -> argparse.ArgumentParser:
         prog="research_state.py",
         description="Central state file management for scholar-deep-research.",
     )
-    p.add_argument("--state", default="research_state.json",
-                   help="Path to the state file (default: research_state.json)")
+    p.add_argument(
+        "--state",
+        default=os.environ.get("SCHOLAR_STATE_PATH", "research_state.json"),
+        help="Path to the state file "
+             "(env: SCHOLAR_STATE_PATH, default: research_state.json)",
+    )
+    p.add_argument("--schema", action="store_true",
+                   help="Print this command's parameter schema as JSON and exit")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="Create a new state file")
@@ -367,11 +479,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--top", type=int, default=20)
     s.set_defaults(func=cmd_select)
 
-    s = sub.add_parser("saturation", help="Check whether the last round saturated")
+    s = sub.add_parser("saturation",
+                       help="Check whether discovery saturated (per source)")
     s.add_argument("--threshold", type=float, default=20.0,
-                   help="New-paper percentage below which we consider saturated (default 20)")
+                   help="New-paper percentage below which a source is "
+                        "considered saturated (default 20)")
     s.add_argument("--max-citations", type=int, default=100,
-                   help="If a new paper has more citations than this, we are NOT saturated")
+                   help="If a new paper has more citations than this, the "
+                        "source is NOT saturated (default 100)")
+    s.add_argument("--min-rounds", type=int, default=2,
+                   help="Minimum rounds before a source can be called "
+                        "saturated. Prevents declaring saturation on a "
+                        "single-query source (default 2).")
+    s.add_argument("--source",
+                   help="Check a single source only (default: all sources)")
     s.set_defaults(func=cmd_saturation)
 
     s = sub.add_parser("set", help="Set a top-level field (e.g., phase)")
@@ -416,6 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
+    maybe_emit_schema(parser, "research_state", argv)
     args = parser.parse_args(argv)
     args.func(args)
 
