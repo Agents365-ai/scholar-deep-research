@@ -107,6 +107,24 @@ Phase 7  Report       渲染原型模板 → 导出参考文献
 
 ## Skill 安装
 
+### 🪄 最简单方式 — 直接让 agent 安装
+
+最省事的安装方式：让你的 coding agent 来做。在 **Claude Code**、**OpenAI Codex**、**OpenCode**、**OpenClaw**、**Hermes Agent** 或 **pi-mono** 里粘贴这一句：
+
+```
+帮我安装 https://github.com/Agents365-ai/scholar-deep-research，然后在仓库里执行 pip install -r requirements.txt
+```
+
+agent 会自动：
+1. 识别这是一个 Agent Skills 仓库（根目录有 `SKILL.md`）
+2. `git clone` 到当前平台对应的 skills 目录（如 `~/.claude/skills/`、`~/.config/opencode/skills/`、`~/.openclaw/skills/`、`~/.hermes/skills/research/`、`~/.pimo/skills/` 或 `~/.agents/skills/`）
+3. 安装 Python 依赖（`httpx`、`pypdf`）
+4. 确认 skill 已加载并可用
+
+之后向 agent 提出研究需求，skill 会自动触发。无需手动 `git clone`。
+
+如果你更习惯手动操作，下面是各平台的命令。
+
 ### Claude Code
 
 ```bash

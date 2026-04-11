@@ -107,6 +107,24 @@ No API keys are required. For higher OpenAlex / Crossref / PubMed rate limits, p
 
 ## Skill Installation
 
+### 🪄 Quickest — just ask your agent
+
+The simplest install is to let your coding agent do it. In **Claude Code**, **OpenAI Codex**, **OpenCode**, **OpenClaw**, **Hermes Agent**, or **pi-mono**, paste this:
+
+```
+Install https://github.com/Agents365-ai/scholar-deep-research for me, then run pip install -r requirements.txt inside it.
+```
+
+The agent will:
+1. Recognize this as an Agent Skills repo (`SKILL.md` at the root)
+2. `git clone` it into the correct skills directory for whichever platform is hosting it (e.g. `~/.claude/skills/`, `~/.config/opencode/skills/`, `~/.openclaw/skills/`, `~/.hermes/skills/research/`, `~/.pimo/skills/`, or `~/.agents/skills/`)
+3. Install Python dependencies (`httpx`, `pypdf`)
+4. Confirm the skill is loaded and ready
+
+After that, ask for a research report and the skill triggers automatically. No manual `git clone` needed.
+
+If you prefer to do it by hand, the per-platform commands are below.
+
 ### Claude Code
 
 ```bash
