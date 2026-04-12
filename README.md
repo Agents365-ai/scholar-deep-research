@@ -97,97 +97,28 @@ Each phase has a completion gate. Each gate is checked against `research_state.j
 ### Pipeline diagram
 
 ```mermaid
-flowchart TD
-    U([User question]) --> P0
+flowchart LR
+    Q([Question]) --> P0[0 · Scope]
+    P0 --> P1[1 · Discover]
+    P1 --> P2[2 · Triage]
+    P2 --> P3[3 · Deep read]
+    P3 --> P4[4 · Chase]
+    P4 --> P5[5 · Synthesize]
+    P5 --> P6[6 · Self-critique]
+    P6 -- blockers --> P1
+    P6 --> P7[7 · Report]
+    P7 --> OUT([Cited report + .bib])
 
-    subgraph P0[Phase 0 · Scope]
-        P0A["research_state.py init<br/>question + archetype + clusters"]
-    end
+    STATE[(research_state.json)]
+    P0 & P1 & P2 & P3 & P4 & P5 & P6 & P7 <-.-> STATE
 
-    subgraph P1[Phase 1 · Discovery]
-        direction LR
-        S1[search_openalex.py]
-        S2[search_arxiv.py]
-        S3[search_crossref.py]
-        S4[search_pubmed.py]
-        S1 & S2 & S3 & S4 --> D[dedupe_papers.py]
-        D --> SAT{{"research_state.py saturation<br/>overall_saturated?"}}
-        SAT -- no --> S1
-    end
-
-    subgraph P2[Phase 2 · Triage]
-        R["rank_papers.py<br/>α·rel + β·cite + γ·rec + δ·venue"]
-        R --> SEL["research_state.py select --top N"]
-    end
-
-    subgraph P3[Phase 3 · Deep read]
-        PDF[extract_pdf.py]
-        EV["research_state.py evidence<br/>method / findings / limits per paper"]
-        PDF --> EV
-    end
-
-    subgraph P4[Phase 4 · Citation chase]
-        DRY["build_citation_graph.py --dry-run<br/>preview request count"]
-        DRY --> CG["build_citation_graph.py<br/>--idempotency-key ..."]
-        CG -. cache hit .-> CACHE[(".scholar_cache/")]
-        CG --> REFEED{{"New high-score papers?"}}
-        REFEED -- yes --> R
-    end
-
-    subgraph P5[Phase 5 · Synthesis]
-        TH[research_state.py theme]
-        TN[research_state.py tension]
-    end
-
-    subgraph P6[Phase 6 · Self-critique]
-        CRIT["assets/prompts/self_critique.md<br/>14-point adversarial checklist"]
-        CRIT --> FIX{"Blockers?"}
-        FIX -- yes --> R
-        FIX -- no --> CA["research_state.py critique<br/>appendix"]
-    end
-
-    subgraph P7[Phase 7 · Report]
-        TPL["assets/templates/&lt;archetype&gt;.md"]
-        BIB["export_bibtex.py<br/>bibtex / csl-json / ris"]
-    end
-
-    P0 --> P1 --> G1{{"Gate 1→2<br/>saturation + ≥3 sources"}}
-    G1 --> P2 --> G2{{"Gate 2→3<br/>top-N + score components"}}
-    G2 --> P3 --> G3{{"Gate 3→4<br/>≥80% full depth"}}
-    G3 --> P4 --> G4{{"Gate 4→5<br/>graph depth ≥1 on seeds"}}
-    G4 --> P5 --> G5{{"Gate 5→6<br/>≥3 themes + tensions"}}
-    G5 --> P6 --> G6{{"Gate 6→7<br/>no unanchored claims"}}
-    G6 --> P7 --> OUT(["reports/&lt;slug&gt;_YYYYMMDD.md + .bib"])
-
-    STATE[("research_state.json<br/>single source of truth")]
-    P0A -.writes.-> STATE
-    D -.ingest.-> STATE
-    SEL -.writes.-> STATE
-    EV -.writes.-> STATE
-    CG -.writes.-> STATE
-    TH -.writes.-> STATE
-    TN -.writes.-> STATE
-    CA -.writes.-> STATE
-    STATE -.reads.-> R
-    STATE -.reads.-> PDF
-    STATE -.reads.-> DRY
-    STATE -.reads.-> TPL
-    STATE -.reads.-> BIB
-
-    MCP[["MCP enrichment<br/>asta / brave<br/>optional, never blocking"]]
-    MCP -. ingest .-> STATE
-
-    classDef script fill:#eef5ff,stroke:#1F6FEB,color:#0b2e66;
-    classDef gate fill:#fff7e6,stroke:#d48806,color:#5c3a00;
+    classDef phase fill:#eef5ff,stroke:#1F6FEB,color:#0b2e66;
     classDef state fill:#f6ffed,stroke:#389e0d,color:#135200;
-    classDef optional fill:#f9f0ff,stroke:#722ed1,color:#22075e,stroke-dasharray: 3 3;
-    class P0A,S1,S2,S3,S4,D,R,SEL,PDF,EV,DRY,CG,TH,TN,CRIT,CA,TPL,BIB script;
-    class G1,G2,G3,G4,G5,G6,SAT,FIX,REFEED gate;
-    class STATE,CACHE state;
-    class MCP optional;
+    class P0,P1,P2,P3,P4,P5,P6,P7 phase;
+    class STATE state;
 ```
 
-Three invariants the diagram makes load-bearing: (1) **every phase writes to `research_state.json` through a dedicated `research_state.py` subcommand**, never by direct file edits; (2) **phase gates are real** — the `G1…G6` diamonds are enforced by `research_state.py saturation` / `query` checks, not by prose; (3) **MCP is a dashed side-input**, never on the critical path — scripts are the spine, MCP is the skin.
+Every phase reads and writes `research_state.json` — it's the single source of truth that makes the workflow resumable and auditable. Phase 6 (self-critique) can loop back to Phase 1 when it finds gaps; everything else is linear.
 
 ## Prerequisites
 
