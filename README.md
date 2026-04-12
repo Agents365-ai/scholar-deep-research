@@ -221,6 +221,36 @@ git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skil
 skills install scholar-deep-research
 ```
 
+### Updating
+
+The skill **auto-updates on invocation.** Every time a host LLM activates `scholar-deep-research` for a new research task, Phase 0 Step 0 runs `python scripts/check_update.py`, which:
+
+1. `git fetch`es the upstream remote (the one network call) — typically a few hundred milliseconds
+2. Fast-forwards the local checkout if an update is available
+3. Refuses to touch your working tree if you have local edits — you'll see a one-line `[Skill update skipped — you have local changes …]` notice instead of having work clobbered
+4. Detects `requirements.txt` drift and surfaces a hint; **pip install is never run automatically** (the skill doesn't know which Python / venv is yours)
+5. Never fails the workflow — offline, no remote, or package-manager install all degrade silently to `check_failed` / `not_a_git_repo` and research proceeds with the current version
+
+When an update is applied you'll see a single line in the chat, e.g. `[Skill updated: abc123 → def456 (3 commits). Continuing with new version.]`. The `from` / `to` short SHAs let you run `git log abc123..def456` in the skill directory to see exactly what changed.
+
+**Pinning a version.** If you want to hold a specific commit — for a paper submission, a reproducibility run, or while a downstream script is being validated — set:
+
+```bash
+export SCHOLAR_SKIP_UPDATE_CHECK=1
+```
+
+With that set, the auto-update check short-circuits and the skill runs exactly the version on disk until you unset the variable. You can also combine with a `git checkout <sha>` to pin a specific historical version.
+
+**Manual update** (also works as a last resort):
+
+```bash
+cd ~/.claude/skills/scholar-deep-research   # or your install path
+git pull --ff-only
+pip install -r requirements.txt              # only if you see the deps-changed hint
+```
+
+Users installed through a package manager (ClawHub, SkillsMP, Hermes registry) should use that manager's own update command instead; `check_update.py` will detect the non-git install and stay out of its way.
+
 ### Installation paths summary
 
 | Platform | Global path | Project path |

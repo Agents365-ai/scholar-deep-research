@@ -221,6 +221,36 @@ git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skil
 skills install scholar-deep-research
 ```
 
+### 自动升级
+
+本 skill **每次调用时自动检查升级**。当宿主 LLM 为一次新的研究任务激活 `scholar-deep-research` 时,Phase 0 Step 0 会运行 `python scripts/check_update.py`,它会:
+
+1. 向上游远端跑一次 `git fetch`(唯一的网络调用),通常几百毫秒
+2. 如果有新提交,自动 fast-forward 到最新版本
+3. 如果本地有未提交改动,**拒绝覆盖**,只打印一行提示 `[Skill update skipped — you have local changes …]`,你的工作绝不会丢
+4. 检测到 `requirements.txt` 有变化时只给出提示,**不会自动 `pip install`**(skill 不知道你用的是哪个 Python / venv)
+5. **永不阻断工作流**——离线、无远端、或包管理器安装都会静默降级到 `check_failed` / `not_a_git_repo`,研究照常继续
+
+升级生效时你只会看到一行信息,例如 `[Skill updated: abc123 → def456 (3 commits). Continuing with new version.]`。短 SHA 让你可以在 skill 目录里跑 `git log abc123..def456` 看改动。
+
+**固定版本**。如果你需要锁定一个特定 commit——投稿留存、复现实验、或下游脚本还没验证完新版本——设置:
+
+```bash
+export SCHOLAR_SKIP_UPDATE_CHECK=1
+```
+
+这之后自动升级检查会直接短路,skill 一直运行磁盘上的当前版本,直到你取消这个环境变量。也可以配合 `git checkout <sha>` 固定到任意历史版本。
+
+**手动升级**(也作为最后兜底):
+
+```bash
+cd ~/.claude/skills/scholar-deep-research   # 或你的实际安装路径
+git pull --ff-only
+pip install -r requirements.txt              # 仅当看到依赖变化提示时执行
+```
+
+通过包管理器安装的用户(ClawHub、SkillsMP、Hermes 注册表等)应使用对应管理器自己的升级命令;`check_update.py` 会检测到非 git 安装并主动退出,不干扰包管理器。
+
 ### 安装路径汇总
 
 | 平台 | 全局路径 | 项目路径 |

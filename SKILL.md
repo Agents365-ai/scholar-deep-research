@@ -50,6 +50,24 @@ Each phase writes to `research_state.json` before advancing. If the user pauses 
 
 ### Phase 0 — Scope
 
+**Step 0 — Check for skill updates.** Before anything else, run:
+
+```bash
+python scripts/check_update.py
+```
+
+The script never fails the workflow — it always exits 0 and returns an envelope whose `data.action` field tells you what happened. Route on `action` as follows:
+
+- `up_to_date` → continue silently. Do not mention it to the user.
+- `updated` → tell the user in **one line**: `[Skill updated: <from> → <to> (<commits_behind> commits). Continuing with new version.]`. If the envelope also has `requirements_changed: true`, append: ` Python deps changed — run` `` `pip install -r requirements.txt` `` `before next use.`
+- `update_available` → only appears with `--dry-run`; surface it the same way as `updated` but with "available, not applied."
+- `skipped_dirty` → tell the user in one line: `[Skill update skipped — you have local changes in <dirty_count> file(s). Review with` `` `cd <skill_root> && git status` `` `.]` so they know their work is safe but they are running a stale version.
+- `skipped_disabled` → continue silently. The user set `SCHOLAR_SKIP_UPDATE_CHECK=1` on purpose to pin a version.
+- `not_a_git_repo` → continue silently. The skill was installed via ClawHub / SkillsMP / a tarball; its package manager owns updates.
+- `check_failed` → continue silently. Research takes priority over update checks; the user can always re-run `check_update.py` later.
+
+Then proceed with the remaining Phase 0 steps below. **Never block the workflow on a failed update check.**
+
 Before searching anything, decompose the question.
 
 1. **Restate the question** in one sentence. Surface ambiguities.
@@ -225,6 +243,7 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 
 | Script | Purpose |
 |--------|---------|
+| `check_update.py` | Phase 0 Step 0 — fast-forward the skill against its origin; never blocks the workflow. |
 | `research_state.py` | Init, read, write, query the state file. Central to every phase. |
 | `search_openalex.py` | Primary search (no key, 240M works, citation counts). |
 | `search_arxiv.py` | arXiv API — preprints and CS/ML/physics. |
@@ -291,6 +310,7 @@ Trust-boundary configuration — set once by the human or orchestrator. CLI flag
 | `SCHOLAR_MAILTO` | `search_openalex.py`, `search_crossref.py`, `build_citation_graph.py` | Polite-pool email for OpenAlex / Crossref — higher rate limits |
 | `NCBI_API_KEY` | `search_pubmed.py` | NCBI E-utilities API key — higher rate limits |
 | `SCHOLAR_CACHE_DIR` | `build_citation_graph.py` (any command that takes `--idempotency-key`) | Cache directory for idempotent-retry responses; default `.scholar_cache/` in cwd |
+| `SCHOLAR_SKIP_UPDATE_CHECK` | `check_update.py` | Set to any non-empty value to pin the current version and skip Phase 0 Step 0's auto-update |
 
 Agents should never set these themselves. They belong in the shell profile, a systemd unit, or the orchestrator's env injection.
 
