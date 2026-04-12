@@ -32,7 +32,7 @@ def search(query: str, limit: int, email: str | None,
         "per-page": min(limit, 200),
         "select": ",".join([
             "id", "doi", "title", "authorships", "publication_year",
-            "primary_location", "host_venue", "cited_by_count",
+            "primary_location", "cited_by_count",
             "abstract_inverted_index", "open_access",
         ]),
     }
@@ -95,8 +95,6 @@ def _normalize(w: dict[str, Any]) -> dict[str, Any]:
     primary = w.get("primary_location") or {}
     src = primary.get("source") or {}
     venue = src.get("display_name")
-    if not venue and w.get("host_venue"):
-        venue = w["host_venue"].get("display_name")
 
     pdf_url = None
     if primary.get("pdf_url"):
