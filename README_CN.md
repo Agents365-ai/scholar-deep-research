@@ -17,7 +17,7 @@
 - **强制自我批判** — Phase 6 执行 14 项对抗性检查清单，发现写入报告附录
 - **引用严谨** — 正文每条非平凡论断必须带 `[^id]` 锚点，无锚点不通过门控
 - **BibTeX / CSL-JSON / RIS 导出** — 参考文献从 state 生成，无需重打
-- **PDF 文本提取** — 基于 `pypdf`，自动检测扫描版 PDF
+- **PDF 文本提取** — 基于 `pypdf`，自动检测扫描版 PDF。`--doi` 模式通过 [paper-fetch](https://github.com/Agents365-ai/paper-fetch)（5 源 OA 链）或 Unpaywall 回退解析论文
 - **MCP 增强而非依赖** — 可选使用 Semantic Scholar (asta) 与 Brave Search MCP，但工作流在 MCP 不可用时仍能完整运行
 - 当用户问题需要学术依据时主动触发
 
@@ -331,7 +331,7 @@ scholar-deep-research/
 │   ├── dedupe_papers.py           # 跨源去重
 │   ├── rank_papers.py             # 透明打分
 │   ├── build_citation_graph.py    # 正向 + 反向滚雪球
-│   ├── extract_pdf.py             # pypdf 提取
+│   ├── extract_pdf.py             # PDF 提取 + DOI 解析（paper-fetch / Unpaywall）
 │   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
 ├── references/
 │   ├── search_strategies.md       # 布尔、PICO、滚雪球、饱和度
@@ -356,6 +356,7 @@ scholar-deep-research/
 
 - **不含 Google Scholar / Web of Science / Scopus** — 这些数据源无公开 API 或需机构访问权限。如有需要可在报告附录注明"未检索"
 - **扫描版 PDF** — `extract_pdf.py` 能检测但不做 OCR。如需识别文字请单独走 OCR 流程
+- **DOI 解析需开放获取** — `--doi` 模式仅能找到合法开放获取的 PDF（通过 [paper-fetch](https://github.com/Agents365-ai/paper-fetch) 或 Unpaywall）。付费墙论文退化为仅摘要
 - **arXiv 无引用计数** — 仅出现在 arXiv 的论文 `citations=null`，排序公式中引用项贡献为 0
 - **PubMed 完整摘要** — 默认只取 esummary 以提速；需要全文摘要请加 `--with-abstracts`
 - **英文偏倚** — 4 个数据源都收录非英文文献，但检索质量参差。若主题非英文文献多，请在报告局限性中注明

@@ -17,7 +17,7 @@ A 7-phase, script-driven academic research workflow that turns a research questi
 - **Mandatory self-critique** — Phase 6 runs a 14-point adversarial checklist; findings go in the report appendix
 - **Citation rigor** — every claim in the body carries a `[^id]` anchor; unanchored claims fail the gate
 - **BibTeX / CSL-JSON / RIS export** — the bibliography is generated from state, not retyped
-- **PDF text extraction** — `pypdf`-based, with scanned-PDF detection
+- **PDF text extraction** — `pypdf`-based, with scanned-PDF detection. `--doi` mode resolves papers via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) (5-source OA chain) or Unpaywall fallback
 - **MCP enrichment, not dependency** — uses Semantic Scholar (asta) and Brave Search MCP tools when available, but the workflow is fully functional without them
 - Triggers proactively when a user question requires academic grounding
 
@@ -333,7 +333,7 @@ scholar-deep-research/
 │   ├── dedupe_papers.py           # Cross-source deduplication
 │   ├── rank_papers.py             # Transparent scoring
 │   ├── build_citation_graph.py    # Forward + backward snowball
-│   ├── extract_pdf.py             # pypdf-based extraction
+│   ├── extract_pdf.py             # PDF extraction with DOI resolution (paper-fetch / Unpaywall)
 │   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
 ├── references/
 │   ├── search_strategies.md       # Boolean, PICO, snowballing, saturation
@@ -358,6 +358,7 @@ scholar-deep-research/
 
 - **No Google Scholar / Web of Science / Scopus** — these have no public API or require institutional access. Mention in report appendix as "not consulted" if it matters.
 - **Scanned PDFs** — `extract_pdf.py` detects them but doesn't OCR. Use a separate OCR step if needed.
+- **DOI resolution requires open access** — `--doi` mode only finds legally open-access PDFs (via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) or Unpaywall). Paywalled papers fall back to abstract-only.
 - **arXiv has no citation counts** — arXiv-only papers get `citations=null` and a 0 contribution from the citation component of the rank score.
 - **PubMed full abstracts** — fetched on demand only (`--with-abstracts`); the default round-trip uses esummary for speed.
 - **English-language bias** — all four sources index non-English work but search quality varies. Note in the report's limitations if the topic has substantial non-English literature.

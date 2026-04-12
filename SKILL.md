@@ -152,11 +152,13 @@ python scripts/research_state.py select --state research_state.json --top 20
 
 For each paper in the top-N: get the best available full text, extract evidence, attach to state.
 
-1. **Preferred order for full text:** publisher PDF URL from OpenAlex → arXiv PDF → institutional repository → preprint server → abstract only (with a warning attached to the paper record).
-2. **Extract text** when a PDF is available:
+1. **Preferred order for full text:** resolve by DOI (automatic OA chain) → publisher PDF URL from OpenAlex → arXiv PDF → institutional repository → preprint server → abstract only (with a warning attached to the paper record).
+2. **Extract text** — use `--doi` when the paper's DOI is known (resolves and extracts in one step), or `--input`/`--url` for direct paths:
    ```bash
+   python scripts/extract_pdf.py --doi 10.1038/s41586-020-2649-2 --output paper.txt
    python scripts/extract_pdf.py --input paper.pdf --output paper.txt
    ```
+   DOI mode uses the [paper-fetch](https://github.com/Agents365-ai/paper-fetch) skill (5-source OA chain) if installed, otherwise falls back to Unpaywall. The output envelope includes `fetch_meta` with title, authors, year, and source when using `--doi`.
 3. **Fill the per-paper evidence slot** in state (the agent does this; no script). For each paper capture:
    - `question_or_hypothesis`
    - `method` (one sentence)
@@ -252,7 +254,7 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 | `dedupe_papers.py` | DOI normalization + title similarity merging across sources. |
 | `rank_papers.py` | Transparent scoring formula. Prints the formula and per-paper components. |
 | `build_citation_graph.py` | Forward/backward snowballing via OpenAlex. |
-| `extract_pdf.py` | Full-text extraction (pypdf). Safe on scanned PDFs (skips, emits warning). |
+| `extract_pdf.py` | Full-text extraction (pypdf). Accepts `--input`, `--url`, or `--doi`. DOI mode resolves via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) skill if installed, falls back to Unpaywall. Safe on scanned PDFs (skips, emits warning). |
 | `export_bibtex.py` | BibTeX / CSL-JSON / RIS export from state. |
 
 All scripts accept `--help`, `--schema`, emit a structured JSON envelope on stdout, and use `research_state.json` as the single source of truth. Every script is idempotent on the state file (network-layer idempotency is P1 work).
@@ -310,6 +312,7 @@ Trust-boundary configuration — set once by the human or orchestrator. CLI flag
 | `SCHOLAR_MAILTO` | `search_openalex.py`, `search_crossref.py`, `build_citation_graph.py` | Polite-pool email for OpenAlex / Crossref — higher rate limits |
 | `NCBI_API_KEY` | `search_pubmed.py` | NCBI E-utilities API key — higher rate limits |
 | `SCHOLAR_CACHE_DIR` | `build_citation_graph.py` (any command that takes `--idempotency-key`) | Cache directory for idempotent-retry responses; default `.scholar_cache/` in cwd |
+| `PAPER_FETCH_SCRIPT` | `extract_pdf.py` | Path to paper-fetch's `fetch.py`. If unset, auto-discovers across all known skill install paths (Claude Code, OpenCode, OpenClaw, Hermes, ~/.agents). If not found, falls back to Unpaywall |
 | `SCHOLAR_SKIP_UPDATE_CHECK` | `check_update.py` | Set to any non-empty value to pin the current version and skip Phase 0 Step 0's auto-update |
 
 Agents should never set these themselves. They belong in the shell profile, a systemd unit, or the orchestrator's env injection.
