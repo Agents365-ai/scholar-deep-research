@@ -1,6 +1,6 @@
 # scholar-deep-research — 从问题到带引用的研究报告
 
-[English](README.md)
+[English](README.md) &middot; 🌐 **官网:** [agents365-ai.github.io/scholar-deep-research/zh.html](https://agents365-ai.github.io/scholar-deep-research/zh.html)
 
 7 阶段、脚本驱动的学术研究工作流，将研究问题转化为结构化、带引用的研究报告。跨 OpenAlex、arXiv、Crossref、PubMed 多源联邦检索，自动去重、透明排序、引用追踪，并强制执行自我批判环节。
 

@@ -1,6 +1,6 @@
 # scholar-deep-research — From Question to Cited Report
 
-[中文文档](README_CN.md)
+[中文文档](README_CN.md) &middot; 🌐 **Website:** [agents365-ai.github.io/scholar-deep-research](https://agents365-ai.github.io/scholar-deep-research/)
 
 A 7-phase, script-driven academic research workflow that turns a research question into a structured, cited report. Multi-source federation across OpenAlex, arXiv, Crossref, and PubMed with deduplication, transparent ranking, citation chasing, and a mandatory self-critique pass.
 
