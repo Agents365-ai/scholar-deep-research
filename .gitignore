@@ -9,3 +9,4 @@ reports/
 *.bib
 *.tmp.json
 .search_payload.tmp.json
+CLAUDE.md

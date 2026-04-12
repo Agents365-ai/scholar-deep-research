@@ -94,6 +94,101 @@ Phase 7  Report       渲染原型模板 → 导出参考文献
 
 每个阶段都有完成门控，通过门控前需校验 `research_state.json`。
 
+### 流程图
+
+```mermaid
+flowchart TD
+    U([用户问题]) --> P0
+
+    subgraph P0[Phase 0 · 问题拆解]
+        P0A["research_state.py init<br/>问题 + 原型 + 关键词簇"]
+    end
+
+    subgraph P1[Phase 1 · 多源检索]
+        direction LR
+        S1[search_openalex.py]
+        S2[search_arxiv.py]
+        S3[search_crossref.py]
+        S4[search_pubmed.py]
+        S1 & S2 & S3 & S4 --> D[dedupe_papers.py]
+        D --> SAT{{"research_state.py saturation<br/>是否已饱和？"}}
+        SAT -- 否 --> S1
+    end
+
+    subgraph P2[Phase 2 · 排序筛选]
+        R["rank_papers.py<br/>α·相关 + β·引用 + γ·时效 + δ·期刊"]
+        R --> SEL["research_state.py select --top N"]
+    end
+
+    subgraph P3[Phase 3 · 深度阅读]
+        PDF[extract_pdf.py]
+        EV["research_state.py evidence<br/>每篇论文的方法 / 发现 / 局限"]
+        PDF --> EV
+    end
+
+    subgraph P4[Phase 4 · 引用追踪]
+        DRY["build_citation_graph.py --dry-run<br/>预估请求次数"]
+        DRY --> CG["build_citation_graph.py<br/>--idempotency-key ..."]
+        CG -. 命中缓存 .-> CACHE[(".scholar_cache/")]
+        CG --> REFEED{{"新增高分论文？"}}
+        REFEED -- 有 --> R
+    end
+
+    subgraph P5[Phase 5 · 主题综合]
+        TH[research_state.py theme]
+        TN[research_state.py tension]
+    end
+
+    subgraph P6[Phase 6 · 自我批判]
+        CRIT["assets/prompts/self_critique.md<br/>14 项对抗性检查"]
+        CRIT --> FIX{"存在阻断项？"}
+        FIX -- 是 --> R
+        FIX -- 否 --> CA["research_state.py critique<br/>写入附录"]
+    end
+
+    subgraph P7[Phase 7 · 报告导出]
+        TPL["assets/templates/&lt;原型&gt;.md"]
+        BIB["export_bibtex.py<br/>bibtex / csl-json / ris"]
+    end
+
+    P0 --> P1 --> G1{{"门控 1→2<br/>饱和 + ≥3 来源"}}
+    G1 --> P2 --> G2{{"门控 2→3<br/>top-N + 评分分量"}}
+    G2 --> P3 --> G3{{"门控 3→4<br/>≥80% 全文精读"}}
+    G3 --> P4 --> G4{{"门控 4→5<br/>种子深度 ≥1"}}
+    G4 --> P5 --> G5{{"门控 5→6<br/>≥3 主题 + 张力"}}
+    G5 --> P6 --> G6{{"门控 6→7<br/>无悬空论断"}}
+    G6 --> P7 --> OUT(["reports/&lt;slug&gt;_YYYYMMDD.md + .bib"])
+
+    STATE[("research_state.json<br/>唯一事实源")]
+    P0A -.写入.-> STATE
+    D -.ingest.-> STATE
+    SEL -.写入.-> STATE
+    EV -.写入.-> STATE
+    CG -.写入.-> STATE
+    TH -.写入.-> STATE
+    TN -.写入.-> STATE
+    CA -.写入.-> STATE
+    STATE -.读取.-> R
+    STATE -.读取.-> PDF
+    STATE -.读取.-> DRY
+    STATE -.读取.-> TPL
+    STATE -.读取.-> BIB
+
+    MCP[["MCP 增强<br/>asta / brave<br/>可选，永不阻断"]]
+    MCP -. ingest .-> STATE
+
+    classDef script fill:#eef5ff,stroke:#1F6FEB,color:#0b2e66;
+    classDef gate fill:#fff7e6,stroke:#d48806,color:#5c3a00;
+    classDef state fill:#f6ffed,stroke:#389e0d,color:#135200;
+    classDef optional fill:#f9f0ff,stroke:#722ed1,color:#22075e,stroke-dasharray: 3 3;
+    class P0A,S1,S2,S3,S4,D,R,SEL,PDF,EV,DRY,CG,TH,TN,CRIT,CA,TPL,BIB script;
+    class G1,G2,G3,G4,G5,G6,SAT,FIX,REFEED gate;
+    class STATE,CACHE state;
+    class MCP optional;
+```
+
+图中有三条必须守住的约束：(1) **每个阶段的输出都通过 `research_state.py` 的专用子命令写入 `research_state.json`**，从不直接改文件；(2) **阶段门控是真实的**——`G1…G6` 由 `research_state.py saturation` / `query` 强制校验，而不是"感觉差不多了"；(3) **MCP 始终是虚线旁路**，永远不在关键路径上——脚本是脊柱，MCP 是皮肤。
+
 ## 前置条件
 
 - **Python ≥ 3.9**
