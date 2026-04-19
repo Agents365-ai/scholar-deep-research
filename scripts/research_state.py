@@ -70,6 +70,50 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_REQUIRED_STATE_KEYS = (
+    "schema_version", "question", "archetype", "phase",
+    "queries", "papers", "selected_ids", "themes", "tensions",
+)
+
+
+def _validate_state_shape(state: Any, path: Path) -> None:
+    """Raise `state_schema_mismatch` / `state_corrupt` for malformed state.
+
+    Checked once on every load so downstream code can assume the shape.
+    Kept permissive: optional keys (ranking, self_critique, report_path,
+    created_at, updated_at) are NOT required — init creates them but
+    older states may pre-date a field.
+    """
+    if not isinstance(state, dict):
+        err("state_corrupt",
+            f"State file {path} did not parse to an object.",
+            retryable=False, exit_code=EXIT_STATE, path=str(path))
+    missing = [k for k in _REQUIRED_STATE_KEYS if k not in state]
+    if missing:
+        err("state_corrupt",
+            f"State file {path} is missing required keys: {missing}.",
+            retryable=False, exit_code=EXIT_STATE,
+            path=str(path), missing=missing)
+    if state["schema_version"] != SCHEMA_VERSION:
+        err("state_schema_mismatch",
+            f"State schema_version {state['schema_version']} is not "
+            f"supported (this code expects {SCHEMA_VERSION}). If this "
+            f"state was created by a newer version, upgrade the skill; "
+            f"if older, re-init after exporting papers.",
+            retryable=False, exit_code=EXIT_STATE,
+            path=str(path),
+            found=state["schema_version"],
+            expected=SCHEMA_VERSION)
+    if not isinstance(state["papers"], dict):
+        err("state_corrupt",
+            f"State.papers must be an object (got {type(state['papers']).__name__}).",
+            retryable=False, exit_code=EXIT_STATE, path=str(path))
+    if not isinstance(state["queries"], list):
+        err("state_corrupt",
+            f"State.queries must be an array (got {type(state['queries']).__name__}).",
+            retryable=False, exit_code=EXIT_STATE, path=str(path))
+
+
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         err("state_not_found",
@@ -78,12 +122,49 @@ def load_state(path: Path) -> dict[str, Any]:
             retryable=False, exit_code=EXIT_STATE,
             path=str(path))
     try:
-        return json.loads(path.read_text())
+        state = json.loads(path.read_text())
     except json.JSONDecodeError as e:
         err("state_corrupt",
             f"State file {path} is not valid JSON: {e}",
             retryable=False, exit_code=EXIT_STATE,
             path=str(path))
+    _validate_state_shape(state, path)
+    return state
+
+
+def _validate_ingest_payload(payload: Any) -> None:
+    """Validate a search-ingest payload before it touches state.
+
+    Required keys: `source` (str), `query` (str), `round` (int), `papers`
+    (list). Missing or wrong-typed fields raise `invalid_payload` which
+    the CLI/library wrapper routes to EXIT_VALIDATION.
+    """
+    if not isinstance(payload, dict):
+        err("invalid_payload",
+            "Ingest payload must be a JSON object.",
+            retryable=False, exit_code=EXIT_VALIDATION)
+    required = {"source": str, "query": str, "round": int, "papers": list}
+    missing = [k for k in required if k not in payload]
+    if missing:
+        err("invalid_payload",
+            f"Ingest payload missing required keys: {missing}.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            missing=missing)
+    for key, typ in required.items():
+        if not isinstance(payload[key], typ):
+            err("invalid_payload",
+                f"Ingest payload field '{key}' must be {typ.__name__}, "
+                f"got {type(payload[key]).__name__}.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                field=key,
+                expected=typ.__name__,
+                actual=type(payload[key]).__name__)
+    for i, paper in enumerate(payload["papers"]):
+        if not isinstance(paper, dict):
+            err("invalid_payload",
+                f"Ingest payload papers[{i}] must be an object.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                index=i)
 
 
 def _save_state(path: Path, state: dict[str, Any]) -> None:
@@ -215,10 +296,11 @@ def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
     Returns the ingestion summary dict (to be emitted by the caller).
     """
-    source = payload.get("source", "unknown")
-    query = payload.get("query", "")
-    rnd = payload.get("round", 1)
-    incoming = payload.get("papers", [])
+    _validate_ingest_payload(payload)
+    source = payload["source"]
+    query = payload["query"]
+    rnd = payload["round"]
+    incoming = payload["papers"]
 
     summary: dict[str, Any] = {}
 
