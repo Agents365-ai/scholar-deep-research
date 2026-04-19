@@ -2,11 +2,12 @@
 
 [English](README.md) &middot; 🌐 **官网:** [agents365-ai.github.io/scholar-deep-research/zh.html](https://agents365-ai.github.io/scholar-deep-research/zh.html)
 
-7 阶段、脚本驱动的学术研究工作流，将研究问题转化为结构化、带引用的研究报告。跨 OpenAlex、arXiv、Crossref、PubMed 多源联邦检索，自动去重、透明排序、引用追踪，并强制执行自我批判环节。
+8 阶段（Phase 0..7）、脚本驱动的学术研究工作流，将研究问题转化为结构化、带引用的研究报告。跨 OpenAlex、arXiv、Crossref、PubMed 多源联邦检索，自动去重、透明排序、引用追踪，并强制执行自我批判环节。
 
 ## 功能说明
 
-- **端到端研究流程** — 从问题拆解（Phase 0）到带参考文献的成稿报告（Phase 7）
+- **端到端研究流程** — 从问题拆解（Phase 0）到带参考文献的成稿报告（Phase 7），中间强制执行 7 道阶段跃迁门控
+- **Agent-native CLI** — 每个响应都带 `request_id` / `latency_ms` / `cli_version` 的结构化 JSON 信封；每个会变更状态的命令都支持 `--idempotency-key`；提供 `--dry-run` 预览；破坏性操作（如 `init --force`）必须配合 `--dangerous` 确认；门控失败的错误信封会附带 `next: [命令]` 提示，让 agent 无需额外的发现轮次即可恢复
 - **4 个联邦数据源** — OpenAlex（主源，免费、240M+ 论文）、arXiv（预印本）、Crossref（DOI 元数据）、PubMed（生物医学）
 - **透明排序公式** — 论文按公开公式打分（`α·相关性 + β·引用 + γ·时效 + δ·期刊先验`），各项分量写入 state
 - **跨源去重** — DOI 优先 + 标题相似度兜底，一篇论文仅一条记录
@@ -92,7 +93,9 @@ Phase 6  Self-critique  14 项对抗性检查清单（强制）
 Phase 7  Report       渲染原型模板 → 导出参考文献
 ```
 
-每个阶段都有完成门控，通过门控前需校验 `research_state.json`。
+每个阶段跃迁都有强制门控（G1..G7，实现于 `scripts/_gates.py`）。工作流通过 `python scripts/research_state.py --state <path> advance` 一次推进一个门控——该命令会执行门控谓词，若未满足条件则返回结构化的 `gate_not_met` 信封（列出失败的检查项并建议下一步命令），无法通过直接设置 `phase` 绕过门控。
+
+每个会变更状态的命令（`ingest`、`rank`、`dedupe`、`citation-chase` 及 `research_state.py` 下的重放子命令）都接受 `--idempotency-key`——带相同 key 的重试调用会返回原结果而不会重复变更状态,因此 agent 的崩溃恢复是契约级幂等，而非仅靠自然幂等。状态文件本身通过同目录下的 `.lock` 文件加独占锁、以 `os.replace` 原子替换写入，因此 Phase 1 的并发检索天然互不竞争。
 
 ### 流程图
 

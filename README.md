@@ -2,11 +2,12 @@
 
 [中文文档](README_CN.md) &middot; 🌐 **Website:** [agents365-ai.github.io/scholar-deep-research](https://agents365-ai.github.io/scholar-deep-research/)
 
-A 7-phase, script-driven academic research workflow that turns a research question into a structured, cited report. Multi-source federation across OpenAlex, arXiv, Crossref, and PubMed with deduplication, transparent ranking, citation chasing, and a mandatory self-critique pass.
+An 8-phase (Phase 0..7), script-driven academic research workflow that turns a research question into a structured, cited report. Multi-source federation across OpenAlex, arXiv, Crossref, and PubMed with deduplication, transparent ranking, citation chasing, and a mandatory self-critique pass.
 
 ## What it does
 
-- **End-to-end research** — from question decomposition (Phase 0) to a finished report with bibliography (Phase 7)
+- **End-to-end research** — from question decomposition (Phase 0) to a finished report with bibliography (Phase 7), with 7 enforced phase-transition gates in between
+- **Agent-native CLI** — structured JSON envelopes with `request_id` / `latency_ms` / `cli_version` on every response; `--idempotency-key` on every mutating command; `--dry-run` previews; destructive operations (`init --force`) gated behind a paired `--dangerous` acknowledgement; gate failures carry a `next: [commands]` hint so agents recover without a discovery round-trip
 - **4 federated sources** — OpenAlex (primary, free, 240M+ works), arXiv (preprints), Crossref (DOI metadata), PubMed (biomedical)
 - **Transparent ranking** — papers are scored with a published formula (`α·relevance + β·citations + γ·recency + δ·venue_prior`), components written into state
 - **Deduplication across sources** — DOI-first, then title-similarity merge; one paper, one record
@@ -92,7 +93,9 @@ Phase 6  Self-critique  14-point adversarial checklist (mandatory)
 Phase 7  Report       render archetype template → export bibliography
 ```
 
-Each phase has a completion gate. Each gate is checked against `research_state.json` before advancing.
+Each phase transition has an enforced gate (G1..G7 in `scripts/_gates.py`). The workflow advances one gate at a time via `python scripts/research_state.py --state <path> advance` — a call that runs the gate predicate and refuses with a structured `gate_not_met` envelope (listing failing checks *and* suggested next commands) when criteria aren't met. There is no way to skip a gate by setting `phase` directly.
+
+Every mutating command (`ingest`, `rank`, `dedupe`, `citation-chase`, plus the replay subcommands under `research_state.py`) accepts `--idempotency-key` — a retried call with the same key returns the original result without re-mutating state, so agent crash-recovery is contract-idempotent, not just naturally so. The state file itself is written under a sibling `.lock` file with atomic `os.replace`, so concurrent Phase 1 searches are race-free.
 
 ### Pipeline diagram
 
