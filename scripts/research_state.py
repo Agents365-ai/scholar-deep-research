@@ -49,11 +49,12 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from _common import (
     EXIT_STATE, EXIT_VALIDATION, err, maybe_emit_schema, ok,
 )
+from _locking import StateLockTimeout, locked_rmw
 
 SCHEMA_VERSION = 1
 
@@ -85,9 +86,53 @@ def load_state(path: Path) -> dict[str, Any]:
             path=str(path))
 
 
-def save_state(path: Path, state: dict[str, Any]) -> None:
+def _save_state(path: Path, state: dict[str, Any]) -> None:
+    """Atomic, unlocked write. Caller is responsible for locking.
+
+    Used by `cmd_init` (where the file is created fresh under --force
+    control) and by the mutator passed to `_locked_rmw` after it has
+    already acquired the exclusive lock. Do NOT call from outside this
+    module or without holding the state lock — use `_locked_rmw` or one
+    of the public `apply_*` helpers instead.
+    """
     state["updated_at"] = now_iso()
-    path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    os.replace(tmp, path)
+
+
+def _locked_rmw(
+    path: Path,
+    mutator: Callable[[dict[str, Any]], dict[str, Any]],
+    *,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Run `mutator` on the state file under an exclusive lock.
+
+    The mutator receives the current state and returns the new state.
+    `updated_at` is stamped automatically after the mutator returns.
+    If the lock cannot be acquired within `timeout`, emits a structured
+    `state_locked` error and exits with EXIT_STATE (retryable).
+    """
+    def _wrap(state: dict[str, Any]) -> dict[str, Any]:
+        new_state = mutator(state)
+        new_state["updated_at"] = now_iso()
+        return new_state
+
+    try:
+        return locked_rmw(path, _wrap, timeout=timeout, loader=load_state)
+    except StateLockTimeout as exc:
+        err("state_locked", str(exc),
+            retryable=True, exit_code=EXIT_STATE, path=str(path))
+
+
+# `save_state` is a deprecated alias kept only for scripts (rank_papers,
+# dedupe_papers, build_citation_graph) that still write state directly.
+# It performs an atomic write but does NOT acquire the lock. Those scripts
+# are migrated to the locked library API (`apply_*`) in a follow-up; once
+# no import sites remain, this alias is removed.
+def save_state(path: Path, state: dict[str, Any]) -> None:
+    _save_state(path, state)
 
 
 # ---------- ID normalization ----------
@@ -152,7 +197,10 @@ def cmd_init(args: argparse.Namespace) -> None:
         "self_critique": {"findings": [], "resolved": [], "appendix": ""},
         "report_path": None,
     }
-    save_state(path, state)
+    # init writes a fresh file; no prior state to RMW. --force controls
+    # overwrite races at the human/orchestrator layer, not via the lock.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _save_state(path, state)
     ok({"state": str(path), "phase": 0, "schema_version": SCHEMA_VERSION})
 
 
@@ -161,75 +209,84 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
     Input shape: {"source": "openalex", "query": "...", "round": 1, "papers": [...]}
     """
-    state = load_state(Path(args.state))
     payload = json.loads(Path(args.input).read_text())
     source = payload.get("source", "unknown")
     query = payload.get("query", "")
     rnd = payload.get("round", 1)
     incoming = payload.get("papers", [])
 
-    new_count = 0
-    merged_count = 0
-    for p in incoming:
-        pid = make_paper_id(p)
-        p["id"] = pid
-        p.setdefault("source", [])
-        if source not in p["source"]:
-            p["source"].append(source)
-        p.setdefault("first_seen_round", rnd)
-        p.setdefault("selected", False)
-        p.setdefault("depth", "shallow")
-        p.setdefault("discovered_via", "search")
+    summary: dict[str, Any] = {}
 
-        if pid in state["papers"]:
-            existing = state["papers"][pid]
-            # merge sources, prefer richer fields
-            for s in p["source"]:
-                if s not in existing.get("source", []):
-                    existing.setdefault("source", []).append(s)
-            for k in ("doi", "abstract", "pdf_url", "url", "venue", "citations"):
-                if not existing.get(k) and p.get(k):
-                    existing[k] = p[k]
-            merged_count += 1
-        else:
-            state["papers"][pid] = p
-            new_count += 1
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        new_count = 0
+        merged_count = 0
+        for p in incoming:
+            pid = make_paper_id(p)
+            p["id"] = pid
+            p.setdefault("source", [])
+            if source not in p["source"]:
+                p["source"].append(source)
+            p.setdefault("first_seen_round", rnd)
+            p.setdefault("selected", False)
+            p.setdefault("depth", "shallow")
+            p.setdefault("discovered_via", "search")
 
-    state["queries"].append({
-        "source": source,
-        "query": query,
-        "round": rnd,
-        "hits": len(incoming),
-        "new": new_count,
-        "merged": merged_count,
-        "timestamp": now_iso(),
-    })
-    save_state(Path(args.state), state)
-    ok({
-        "source": source,
-        "query": query,
-        "round": rnd,
-        "ingested": len(incoming),
-        "new": new_count,
-        "merged": merged_count,
-        "total_papers": len(state["papers"]),
-    })
+            if pid in state["papers"]:
+                existing = state["papers"][pid]
+                for s in p["source"]:
+                    if s not in existing.get("source", []):
+                        existing.setdefault("source", []).append(s)
+                for k in ("doi", "abstract", "pdf_url", "url", "venue", "citations"):
+                    if not existing.get(k) and p.get(k):
+                        existing[k] = p[k]
+                merged_count += 1
+            else:
+                state["papers"][pid] = p
+                new_count += 1
+
+        state["queries"].append({
+            "source": source,
+            "query": query,
+            "round": rnd,
+            "hits": len(incoming),
+            "new": new_count,
+            "merged": merged_count,
+            "timestamp": now_iso(),
+        })
+        summary.update({
+            "source": source,
+            "query": query,
+            "round": rnd,
+            "ingested": len(incoming),
+            "new": new_count,
+            "merged": merged_count,
+            "total_papers": len(state["papers"]),
+        })
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
+    ok(summary)
 
 
 def cmd_select(args: argparse.Namespace) -> None:
     """Mark the top-N papers (by .score) as selected."""
-    state = load_state(Path(args.state))
-    ranked = sorted(
-        state["papers"].values(),
-        key=lambda p: p.get("score", 0.0),
-        reverse=True,
-    )
-    chosen = ranked[: args.top]
-    chosen_ids = [p["id"] for p in chosen]
-    for pid, p in state["papers"].items():
-        p["selected"] = pid in chosen_ids
-    state["selected_ids"] = chosen_ids
-    save_state(Path(args.state), state)
+    chosen_ids: list[str] = []
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        ranked = sorted(
+            state["papers"].values(),
+            key=lambda p: p.get("score", 0.0),
+            reverse=True,
+        )
+        chosen = ranked[: args.top]
+        ids = [p["id"] for p in chosen]
+        for pid, p in state["papers"].items():
+            p["selected"] = pid in ids
+        state["selected_ids"] = ids
+        chosen_ids.extend(ids)
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
     ok({"selected": len(chosen_ids), "ids": chosen_ids})
 
 
@@ -330,13 +387,16 @@ def cmd_set(args: argparse.Namespace) -> None:
             retryable=False, exit_code=EXIT_VALIDATION,
             field=args.field,
             allowed=sorted(SETTABLE_FIELDS))
-    state = load_state(Path(args.state))
     try:
         value = json.loads(args.value)
     except json.JSONDecodeError:
         value = args.value
-    state[args.field] = value
-    save_state(Path(args.state), state)
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        state[args.field] = value
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
     ok({"field": args.field, "value": value})
 
 
@@ -385,37 +445,43 @@ def cmd_query(args: argparse.Namespace) -> None:
 
 def cmd_evidence(args: argparse.Namespace) -> None:
     """Attach evidence (extracted reading) to a paper."""
-    state = load_state(Path(args.state))
-    if args.id not in state["papers"]:
-        err("unknown_paper_id",
-            f"No paper in state with id '{args.id}'.",
-            retryable=False, exit_code=EXIT_VALIDATION,
-            id=args.id)
-    paper = state["papers"][args.id]
-    paper["evidence"] = {
-        "method": args.method,
-        "findings": args.findings or [],
-        "limitations": args.limitations or "",
-        "relevance": args.relevance or "",
-    }
-    paper["depth"] = args.depth
-    save_state(Path(args.state), state)
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        if args.id not in state["papers"]:
+            err("unknown_paper_id",
+                f"No paper in state with id '{args.id}'.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                id=args.id)
+        paper = state["papers"][args.id]
+        paper["evidence"] = {
+            "method": args.method,
+            "findings": args.findings or [],
+            "limitations": args.limitations or "",
+            "relevance": args.relevance or "",
+        }
+        paper["depth"] = args.depth
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
     ok({"id": args.id, "depth": args.depth})
 
 
 def cmd_theme(args: argparse.Namespace) -> None:
-    state = load_state(Path(args.state))
-    state["themes"].append({
-        "name": args.name,
-        "summary": args.summary or "",
-        "paper_ids": args.paper_ids or [],
-    })
-    save_state(Path(args.state), state)
-    ok({"theme": args.name, "total_themes": len(state["themes"])})
+    total = [0]
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        state["themes"].append({
+            "name": args.name,
+            "summary": args.summary or "",
+            "paper_ids": args.paper_ids or [],
+        })
+        total[0] = len(state["themes"])
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
+    ok({"theme": args.name, "total_themes": total[0]})
 
 
 def cmd_tension(args: argparse.Namespace) -> None:
-    state = load_state(Path(args.state))
     try:
         sides = json.loads(args.sides)
     except json.JSONDecodeError as e:
@@ -423,26 +489,37 @@ def cmd_tension(args: argparse.Namespace) -> None:
             f"--sides is not valid JSON: {e}",
             retryable=False, exit_code=EXIT_VALIDATION,
             field="sides")
-    state["tensions"].append({
-        "topic": args.topic,
-        "sides": sides,
-    })
-    save_state(Path(args.state), state)
-    ok({"topic": args.topic, "total_tensions": len(state["tensions"])})
+    total = [0]
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        state["tensions"].append({
+            "topic": args.topic,
+            "sides": sides,
+        })
+        total[0] = len(state["tensions"])
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
+    ok({"topic": args.topic, "total_tensions": total[0]})
 
 
 def cmd_critique(args: argparse.Namespace) -> None:
-    state = load_state(Path(args.state))
-    crit = state.setdefault("self_critique",
-                            {"findings": [], "resolved": [], "appendix": ""})
-    if args.finding:
-        crit["findings"].append(args.finding)
-    if args.resolve:
-        crit["resolved"].append(args.resolve)
-    if args.appendix:
-        crit["appendix"] = args.appendix
-    save_state(Path(args.state), state)
-    ok({"critique": crit})
+    final_crit: dict[str, Any] = {}
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        crit = state.setdefault("self_critique",
+                                {"findings": [], "resolved": [], "appendix": ""})
+        if args.finding:
+            crit["findings"].append(args.finding)
+        if args.resolve:
+            crit["resolved"].append(args.resolve)
+        if args.appendix:
+            crit["appendix"] = args.appendix
+        final_crit.update(crit)
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
+    ok({"critique": final_crit})
 
 
 # ---------- CLI ----------
