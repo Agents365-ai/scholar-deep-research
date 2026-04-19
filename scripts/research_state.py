@@ -53,7 +53,7 @@ from typing import Any, Callable
 
 from _common import (
     EXIT_STATE, EXIT_VALIDATION, err, maybe_emit_schema, ok,
-    set_command_meta,
+    reject_dry_run_with_idempotency, set_command_meta, with_idempotency,
 )
 from _locking import StateLockTimeout, locked_rmw
 
@@ -311,8 +311,16 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     Input shape: {"source": "openalex", "query": "...", "round": 1, "papers": [...]}
     """
     payload = json.loads(Path(args.input).read_text())
-    summary = apply_ingest(Path(args.state), payload)
-    ok(summary)
+
+    def compute() -> dict[str, Any]:
+        return apply_ingest(Path(args.state), payload)
+
+    # `input` is part of the signature (different file → different result).
+    # The payload content itself is not included in the signature — the file
+    # path is the identity; if the file contents change under a retried key,
+    # that is the caller's choice and the result is what it is. This matches
+    # what gh / kubectl do with input files under --idempotency-key.
+    with_idempotency(args, compute)
 
 
 def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -873,13 +881,26 @@ def cmd_rank(args: argparse.Namespace) -> None:
     This subcommand is for replay/audit — normal use is via rank_papers.py,
     which calls apply_ranking() directly.
     """
+    reject_dry_run_with_idempotency(args)
     patch = json.loads(Path(args.patch).read_text())
-    summary = apply_ranking(
-        Path(args.state),
-        patch.get("scored_papers") or {},
-        patch.get("meta") or {},
-    )
-    ok(summary)
+    if args.dry_run:
+        ok({
+            "dry_run": True,
+            "would_apply": {
+                "scored_papers": len(patch.get("scored_papers") or {}),
+                "meta": patch.get("meta") or {},
+            },
+        })
+        return
+
+    def compute() -> dict[str, Any]:
+        return apply_ranking(
+            Path(args.state),
+            patch.get("scored_papers") or {},
+            patch.get("meta") or {},
+        )
+
+    with_idempotency(args, compute)
 
 
 def cmd_dedupe(args: argparse.Namespace) -> None:
@@ -887,13 +908,26 @@ def cmd_dedupe(args: argparse.Namespace) -> None:
 
     Patch shape: {"new_papers": {pid: paper}, "id_remap": {old_id: new_id}}.
     """
+    reject_dry_run_with_idempotency(args)
     patch = json.loads(Path(args.patch).read_text())
-    summary = apply_dedupe(
-        Path(args.state),
-        patch.get("new_papers") or {},
-        patch.get("id_remap") or {},
-    )
-    ok(summary)
+    if args.dry_run:
+        ok({
+            "dry_run": True,
+            "would_apply": {
+                "new_papers": len(patch.get("new_papers") or {}),
+                "ids_remapped": len(patch.get("id_remap") or {}),
+            },
+        })
+        return
+
+    def compute() -> dict[str, Any]:
+        return apply_dedupe(
+            Path(args.state),
+            patch.get("new_papers") or {},
+            patch.get("id_remap") or {},
+        )
+
+    with_idempotency(args, compute)
 
 
 def cmd_citation_chase(args: argparse.Namespace) -> None:
@@ -901,13 +935,26 @@ def cmd_citation_chase(args: argparse.Namespace) -> None:
 
     Patch shape: {"new_records": [...], "query_entry": {source, query, ...}}.
     """
+    reject_dry_run_with_idempotency(args)
     patch = json.loads(Path(args.patch).read_text())
-    summary = apply_citation_chase(
-        Path(args.state),
-        patch.get("new_records") or [],
-        patch.get("query_entry") or {},
-    )
-    ok(summary)
+    if args.dry_run:
+        ok({
+            "dry_run": True,
+            "would_apply": {
+                "new_records": len(patch.get("new_records") or []),
+                "query_entry": patch.get("query_entry") or {},
+            },
+        })
+        return
+
+    def compute() -> dict[str, Any]:
+        return apply_citation_chase(
+            Path(args.state),
+            patch.get("new_records") or [],
+            patch.get("query_entry") or {},
+        )
+
+    with_idempotency(args, compute)
 
 
 def cmd_critique(args: argparse.Namespace) -> None:
@@ -965,6 +1012,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("ingest", help="Ingest search results from a JSON file")
     s.add_argument("--input", required=True)
+    s.add_argument("--idempotency-key",
+                   help="Retry-safe key. Retried calls with the same key "
+                        "return the original result. Mismatched args with "
+                        "the same key returns idempotency_key_mismatch.")
+    set_command_meta(s, since="0.1.0", tier="write")
     s.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser("select", help="Mark top-N (by score) as selected")
@@ -1027,14 +1079,29 @@ def build_parser() -> argparse.ArgumentParser:
     # (sometimes network-bound) compute step.
     s = sub.add_parser("rank", help="Apply a ranking patch JSON")
     s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Report patch size without mutating state.")
+    s.add_argument("--idempotency-key",
+                   help="Retry-safe key (see ingest --idempotency-key).")
+    set_command_meta(s, since="0.4.0", tier="write")
     s.set_defaults(func=cmd_rank)
 
     s = sub.add_parser("dedupe", help="Apply a dedupe patch JSON")
     s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Report patch size without mutating state.")
+    s.add_argument("--idempotency-key",
+                   help="Retry-safe key (see ingest --idempotency-key).")
+    set_command_meta(s, since="0.4.0", tier="write")
     s.set_defaults(func=cmd_dedupe)
 
     s = sub.add_parser("citation-chase", help="Apply a citation-chase patch JSON")
     s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Report patch size without mutating state.")
+    s.add_argument("--idempotency-key",
+                   help="Retry-safe key (see ingest --idempotency-key).")
+    set_command_meta(s, since="0.4.0", tier="write")
     s.set_defaults(func=cmd_citation_chase)
 
     s = sub.add_parser("theme", help="Add a theme")

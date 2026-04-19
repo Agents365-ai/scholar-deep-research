@@ -26,7 +26,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from _common import maybe_emit_schema, ok
+from _common import (
+    maybe_emit_schema, ok, reject_dry_run_with_idempotency, with_idempotency,
+)
 from research_state import apply_ranking, load_state
 
 # Tier-1 venues. Conservative; users should extend per field.
@@ -105,10 +107,16 @@ def main() -> None:
                    help="Years until recency weight halves (default 5)")
     p.add_argument("--top", type=int, default=20,
                    help="Print top-N to stdout for inspection")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Compute scores and preview top-N, do NOT write to state.")
+    p.add_argument("--idempotency-key",
+                   help="Retry-safe key. Retried calls with the same key "
+                        "return the original result without re-mutating state.")
     p.add_argument("--schema", action="store_true",
                    help="Print this command's parameter schema as JSON and exit")
     maybe_emit_schema(p, "rank_papers")
     args = p.parse_args()
+    reject_dry_run_with_idempotency(args)
 
     path = Path(args.state)
     state = load_state(path)
@@ -161,11 +169,9 @@ def main() -> None:
         "half_life": args.half_life,
         "ranked_at": datetime.now().isoformat(timespec="seconds"),
     }
-    apply_ranking(path, scored_papers, meta)
-
     previews.sort(key=lambda p: p["score"], reverse=True)
     top = previews[: args.top]
-    ok({
+    response = {
         "formula": formula,
         "ranked": len(scored_papers),
         "weights": {
@@ -173,7 +179,18 @@ def main() -> None:
             "gamma": args.gamma, "delta": args.delta,
         },
         "top": top,
-    })
+    }
+
+    if args.dry_run:
+        response["dry_run"] = True
+        ok(response)
+        return
+
+    def compute() -> dict[str, Any]:
+        apply_ranking(path, scored_papers, meta)
+        return response
+
+    with_idempotency(args, compute)
 
 
 if __name__ == "__main__":

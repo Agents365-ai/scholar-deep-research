@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from _common import maybe_emit_schema, ok
+from _common import maybe_emit_schema, ok, with_idempotency
 from research_state import apply_dedupe, load_state, normalize_title
 
 
@@ -88,6 +88,9 @@ def main() -> None:
     )
     p.add_argument("--dry-run", action="store_true",
                    help="Print clusters without modifying state")
+    p.add_argument("--idempotency-key",
+                   help="Retry-safe key. Retried calls with the same key "
+                        "return the original result without re-mutating state.")
     p.add_argument("--schema", action="store_true",
                    help="Print this command's parameter schema as JSON and exit")
     maybe_emit_schema(p, "dedupe_papers")
@@ -138,13 +141,18 @@ def main() -> None:
     # The swap-and-rewrite of papers/selected_ids/themes/tensions runs under
     # the state lock inside apply_dedupe so a concurrent reader never sees
     # state["papers"] without the matching remap.
-    apply_dedupe(path, new_papers, id_remap)
-    ok({
+    response = {
         "before": len(papers),
         "after": len(new_papers),
         "merged_clusters": merged_count,
         "ids_remapped": len(id_remap),
-    })
+    }
+
+    def compute() -> dict[str, Any]:
+        apply_dedupe(path, new_papers, id_remap)
+        return response
+
+    with_idempotency(args, compute)
 
 
 if __name__ == "__main__":
