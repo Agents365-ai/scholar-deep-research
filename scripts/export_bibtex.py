@@ -15,6 +15,7 @@ significant title word — stable and human-readable.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys

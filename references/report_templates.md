@@ -108,5 +108,5 @@ Every report:
 - Has a methodology appendix listing the queries run, sources consulted, ranking weights, and dedupe stats. Pull from `state.queries` and `state.ranking`.
 - Has a self-critique appendix copied verbatim from `state.self_critique.appendix`.
 - Includes preprint flags inline (`[^id, preprint]`).
-- Resolves every `[^id]` anchor against the bibliography. The export script enforces this.
+- Resolves every `[^id]` anchor against the bibliography. The host LLM is responsible for this check during Phase 7 — the export script emits entries for `state.papers`, but does not scan the report body for anchors.
 - Saves as `reports/<slug>_<YYYYMMDD>.md` and writes the path back to `state.report_path`.

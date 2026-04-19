@@ -1,6 +1,6 @@
 ---
 name: scholar-deep-research
-description: Use when the user asks for a literature review, academic deep dive, research report, state-of-the-art survey, topic scoping, comparative analysis of methods/papers, grant background, or any request that needs multi-source scholarly evidence with citations. Also trigger proactively when a user question clearly requires academic grounding (e.g. "what's known about X", "compare approach A vs B in the literature", "summarize the field of Y"). Runs a 7-phase, script-driven research workflow across OpenAlex, arXiv, Crossref, and PubMed, with deduplication, transparent ranking, citation chasing, self-critique, and structured report output with verifiable citations.
+description: Use when the user asks for a literature review, academic deep dive, research report, state-of-the-art survey, topic scoping, comparative analysis of methods/papers, grant background, or any request that needs multi-source scholarly evidence with citations. Also trigger proactively when a user question clearly requires academic grounding (e.g. "what's known about X", "compare approach A vs B in the literature", "summarize the field of Y"). Runs an 8-phase (Phase 0..7), script-driven research workflow across OpenAlex, arXiv, Crossref, and PubMed, with deduplication, transparent ranking, citation chasing, self-critique, and structured report output with verifiable citations.
 license: MIT
 homepage: https://github.com/Agents365-ai/scholar-deep-research
 compatibility: Requires Python 3.9+ with httpx and pypdf (see requirements.txt). Works offline-first (no MCP required) but enriches with Semantic Scholar / Brave MCP tools when available.
@@ -33,7 +33,7 @@ End-to-end academic research workflow that turns a question into a cited, struct
 5. **Saturation, not exhaustion, is the stop signal.** A phase ends when a new round of search adds <20% novel papers AND no new paper has >100 citations.
 6. **Self-critique is a phase, not a checkbox.** Phase 6 reads the draft with adversarial intent. Its output goes into the report appendix.
 
-## The 7-phase workflow
+## The 8-phase workflow (Phase 0..7)
 
 ```
 Phase 0: Scope       → decompose question, pick archetype, init state
@@ -85,11 +85,11 @@ Before searching anything, decompose the question.
 4. **Draft keyword clusters** — 3-5 Boolean clusters covering synonyms, acronyms, and variant spellings. Include a "negative" cluster (terms to exclude).
 5. **Initialize state:**
    ```bash
-   python scripts/research_state.py init \
+   python scripts/research_state.py --state research_state.json init \
      --question "<restated question>" \
-     --archetype literature_review \
-     --output research_state.json
+     --archetype literature_review
    ```
+   (`--state` is top-level and applies to every subcommand; `init` itself takes `--question`, `--archetype`, and optional `--force`.)
 
 When in doubt about archetype, ask the user. The choice shapes everything downstream.
 

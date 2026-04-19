@@ -7,7 +7,7 @@ policy:
   allow_implicit_invocation: true
 
 capabilities:
-  - 7-phase research workflow (scope → discover → triage → deep-read → chase → synthesize → critique → report)
+  - 8-phase research workflow, Phase 0..7 (scope → discover → triage → deep-read → chase → synthesize → critique → report)
   - Federated search across OpenAlex (primary), arXiv, Crossref, and PubMed — no API keys required
   - Cross-source deduplication (DOI-first, title-similarity fallback)
   - Transparent paper ranking with a published formula (relevance + citations + recency + venue prior)
