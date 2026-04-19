@@ -22,13 +22,15 @@ import hashlib
 import json
 import os
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Canonical version string. Bump in lockstep with the `version` field in
 # SKILL.md frontmatter so USER_AGENT, telemetry, and skill metadata agree.
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 USER_AGENT = (
     f"scholar-deep-research/{VERSION} "
@@ -45,6 +47,53 @@ EXIT_VALIDATION = 3  # bad input: missing flag, bad value, whitelist violation
 EXIT_STATE = 4       # state file missing, corrupt, or schema mismatch
 
 
+# ---------- TTY detection ----------
+
+def stdout_is_tty() -> bool:
+    """True if stdout is an interactive terminal.
+
+    Scripts use this to pick a human-friendly default (raw text, tables)
+    vs. an agent-friendly default (JSON envelope). Orchestrators that
+    want the agent format regardless of terminal can pipe stdout, or
+    pass an explicit `--format json` / `--output <file>` flag.
+    """
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+# ---------- auto-populated envelope metadata ----------
+#
+# Every ok()/err() envelope carries a `meta` block with:
+#   - request_id: uuid-derived, stable for the life of this process. An
+#     orchestrator may override via the SCHOLAR_REQUEST_ID env var to
+#     correlate envelopes with its own trace.
+#   - latency_ms: monotonic wall-clock since module load (process start).
+#     Useful for SLO tracking even without external instrumentation.
+#   - cli_version: canonical VERSION constant so an agent can detect
+#     drift against a cached schema (Principle 6).
+#   - schema_version: envelope schema version (not CLI version). Bumped
+#     when the envelope shape changes.
+
+_START_MONO = time.monotonic()
+_REQUEST_ID = (
+    os.environ.get("SCHOLAR_REQUEST_ID")
+    or f"req_{uuid.uuid4().hex[:10]}"
+)
+
+
+def _auto_meta() -> dict[str, Any]:
+    # Referenced at call time, so the ordering against SCHEMA_VERSION's
+    # later definition is fine — Python resolves module globals lazily.
+    return {
+        "request_id": _REQUEST_ID,
+        "latency_ms": int((time.monotonic() - _START_MONO) * 1000),
+        "cli_version": VERSION,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
 # ---------- envelope helpers ----------
 
 def ok(data: Any = None, *, meta: dict[str, Any] | None = None,
@@ -52,12 +101,17 @@ def ok(data: Any = None, *, meta: dict[str, Any] | None = None,
     """Print a success envelope to stdout.
 
     Does not exit. Caller returns normally (implicit exit 0).
+    The `meta` block is auto-populated with request_id, latency_ms,
+    cli_version, and schema_version; caller-supplied `meta` entries win
+    on key conflict so a caller can override any of them if needed.
     """
+    merged_meta = _auto_meta()
+    if meta is not None:
+        merged_meta.update(meta)
     payload: dict[str, Any] = {"ok": True}
     if data is not None:
         payload["data"] = data
-    if meta is not None:
-        payload["meta"] = meta
+    payload["meta"] = merged_meta
     payload.update(extra)
     json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
@@ -71,7 +125,8 @@ def err(code: str, message: str, *, retryable: bool = False,
     "upstream_error"). `message` is the human-readable sentence. `retryable`
     signals whether calling the exact same command again may succeed. Any
     additional kwargs become extra fields on the error object (e.g. `field`,
-    `source`, `allowed`).
+    `source`, `allowed`). The top-level envelope carries auto-populated
+    `meta` for correlation.
     """
     error: dict[str, Any] = {
         "code": code,
@@ -79,8 +134,8 @@ def err(code: str, message: str, *, retryable: bool = False,
         "retryable": retryable,
     }
     error.update(ctx)
-    json.dump({"ok": False, "error": error}, sys.stdout,
-              ensure_ascii=False, indent=2)
+    json.dump({"ok": False, "error": error, "meta": _auto_meta()},
+              sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     sys.exit(exit_code)
 
@@ -221,6 +276,23 @@ def _action_type_name(action: argparse.Action) -> str:
     return getattr(t, "__name__", str(t))
 
 
+def set_command_meta(parser: argparse.ArgumentParser, **meta: Any) -> None:
+    """Attach schema metadata to a parser or subparser.
+
+    Supported keys (all optional):
+      since:        first version the command appeared in (e.g. "0.4.0")
+      deprecated:   True if the command is on the deprecation path
+      replaced_by:  name of the command that supersedes this one
+      dangerous:    True for destructive commands (init --force, etc.)
+      tier:         "read" | "write" | "destructive" (for safety UIs)
+
+    Surfaced in `--schema` output under each subcommand's `meta` field.
+    Agents with a cached schema compare `since` / `deprecated` against
+    their local copy to detect drift before calling a renamed method.
+    """
+    parser._schema_meta = dict(meta)  # type: ignore[attr-defined]
+
+
 def _parser_to_schema(parser: argparse.ArgumentParser,
                       command: str) -> dict[str, Any]:
     """Walk an argparse parser into a JSON-serializable schema.
@@ -270,6 +342,9 @@ def _parser_to_schema(parser: argparse.ArgumentParser,
         "description": parser.description or "",
         "params": params,
     }
+    meta = getattr(parser, "_schema_meta", None)
+    if meta:
+        out["meta"] = meta
     if subcommands:
         out["subcommands"] = subcommands
     return out
@@ -290,6 +365,7 @@ def maybe_emit_schema(parser: argparse.ArgumentParser, command: str,
     schema = _parser_to_schema(parser, command)
     schema["exit_codes"] = EXIT_CODE_VOCAB
     schema["envelope_version"] = SCHEMA_VERSION
+    schema["cli_version"] = VERSION
     ok(schema)
     sys.exit(0)
 
@@ -336,9 +412,17 @@ def command_signature(args: argparse.Namespace,
     do not affect output (e.g. `email` for polite-pool identification).
     The `idempotency_key` field is always excluded.
     """
-    ignored = set(exclude) | {"idempotency_key", "dry_run", "schema"}
-    fields = {k: v for k, v in vars(args).items()
-              if k not in ignored and not k.startswith("_")}
+    ignored = set(exclude) | {"idempotency_key", "dry_run", "schema", "func"}
+    fields = {}
+    for k, v in vars(args).items():
+        if k in ignored or k.startswith("_"):
+            continue
+        # Skip callables (e.g. argparse's `func` set_defaults): their repr
+        # contains the function's memory address and changes every process,
+        # which would make every retry look like a signature mismatch.
+        if callable(v):
+            continue
+        fields[k] = v
     blob = json.dumps(fields, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
@@ -369,3 +453,79 @@ def write_cache(key: str, response: dict[str, Any], *,
         "response": response,
     }
     path.write_text(json.dumps(entry, ensure_ascii=False, indent=2))
+
+
+def reject_dry_run_with_idempotency(args: argparse.Namespace) -> None:
+    """Emit `idempotency_with_dry_run` / exit 3 if both flags are set.
+
+    Call at the top of any command that has both `--dry-run` and
+    `--idempotency-key` flags. Without this check, a command that
+    short-circuits on dry-run before reaching `with_idempotency`
+    would silently accept the nonsensical combination.
+    """
+    if getattr(args, "dry_run", False) and getattr(args, "idempotency_key", None):
+        err("idempotency_with_dry_run",
+            "--idempotency-key cannot be combined with --dry-run: a dry "
+            "run does not mutate anything and nothing is cacheable.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            key=args.idempotency_key)
+
+
+def with_idempotency(
+    args: argparse.Namespace,
+    compute: Callable[[], dict[str, Any]],
+    *,
+    signature_exclude: tuple[str, ...] = (),
+) -> None:
+    """Run `compute` under --idempotency-key semantics and emit ok(result).
+
+    Wraps the common cache-check / compute / cache-write dance so every
+    mutating command implements idempotency the same way. The caller
+    supplies a zero-arg `compute` that returns the result dict; this
+    helper handles cache hits, signature mismatches, and the final
+    emission.
+
+    `args` must be an argparse Namespace with an `idempotency_key`
+    attribute (may be None). A non-None key combined with a truthy
+    `dry_run` attribute returns a structured error — dry runs do not
+    mutate and therefore cannot sensibly be cached.
+
+    `signature_exclude` names parameters that should not participate in
+    the signature hash (e.g. `email` for polite-pool fields that do not
+    change the computed result).
+    """
+    key = getattr(args, "idempotency_key", None)
+    dry = getattr(args, "dry_run", False)
+
+    if not key:
+        ok(compute())
+        return
+
+    if dry:
+        err("idempotency_with_dry_run",
+            "--idempotency-key cannot be combined with --dry-run: a dry "
+            "run does not mutate anything and nothing is cacheable.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            key=key)
+
+    sig = command_signature(args, exclude=signature_exclude)
+    cached = read_cache(key)
+    if cached is not None:
+        if cached.get("signature") and cached["signature"] != sig:
+            err("idempotency_key_mismatch",
+                f"Idempotency key '{key}' was previously used with "
+                f"different arguments. Use a new key or flush the cache entry.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                key=key,
+                cached_signature=cached["signature"],
+                current_signature=sig)
+        ok(cached["response"], meta={
+            "cache_hit": True,
+            "idempotency_key": key,
+            "cached_at": cached.get("cached_at"),
+        })
+        return
+
+    result = compute()
+    write_cache(key, result, signature=sig)
+    ok(result, meta={"cache_hit": False, "idempotency_key": key})
