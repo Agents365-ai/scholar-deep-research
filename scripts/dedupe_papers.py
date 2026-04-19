@@ -112,9 +112,12 @@ def main() -> None:
         })
         return
 
-    # Build new papers dict from merged clusters
+    # Build new papers dict from merged clusters and a {old_id: new_id} remap
+    # so we can rewrite ID-bearing collections (selected_ids, themes, tensions)
+    # in the same save — leaving them unrewritten would orphan references.
     from research_state import make_paper_id
     new_papers: dict[str, dict[str, Any]] = {}
+    id_remap: dict[str, str] = {}
     merged_count = 0
     for cluster in clusters.values():
         merged = merge(cluster) if len(cluster) > 1 else cluster[0]
@@ -122,18 +125,50 @@ def main() -> None:
             merged_count += 1
         new_id = make_paper_id(merged)
         merged["id"] = new_id
+        for member in cluster:
+            old_id = member.get("id")
+            if old_id and old_id != new_id:
+                id_remap[old_id] = new_id
         # If two clusters collapse to the same id (rare), prefer the more populated
         if new_id in new_papers:
             new_papers[new_id] = merge([new_papers[new_id], merged])
         else:
             new_papers[new_id] = merged
 
+    def remap(pid: str) -> str:
+        return id_remap.get(pid, pid)
+
+    # Rewrite every ID-bearing collection with the remap. Order matters: papers
+    # must be swapped together with its dependents so state is self-consistent
+    # if a later phase queries right after dedupe.
     state["papers"] = new_papers
+    if state.get("selected_ids"):
+        rewritten: list[str] = []
+        seen: set[str] = set()
+        for pid in state["selected_ids"]:
+            new_pid = remap(pid)
+            if new_pid in new_papers and new_pid not in seen:
+                rewritten.append(new_pid)
+                seen.add(new_pid)
+        state["selected_ids"] = rewritten
+    for theme in state.get("themes", []):
+        if "paper_ids" in theme:
+            theme["paper_ids"] = sorted({
+                remap(pid) for pid in theme["paper_ids"] if remap(pid) in new_papers
+            })
+    for tension in state.get("tensions", []):
+        for side in tension.get("sides", []):
+            if "paper_ids" in side:
+                side["paper_ids"] = sorted({
+                    remap(pid) for pid in side["paper_ids"] if remap(pid) in new_papers
+                })
+
     save_state(path, state)
     ok({
         "before": len(papers),
         "after": len(new_papers),
         "merged_clusters": merged_count,
+        "ids_remapped": len(id_remap),
     })
 
 
