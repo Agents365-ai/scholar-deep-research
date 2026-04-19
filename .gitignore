@@ -9,4 +9,5 @@ reports/
 *.bib
 *.tmp.json
 .search_payload.tmp.json
+.last_update_check
 CLAUDE.md

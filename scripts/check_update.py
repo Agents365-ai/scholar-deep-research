@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """check_update.py — check for and apply skill updates.
 
-Runs as Phase 0 Step 0 before the research workflow starts. Fast-forwards
-the skill's git checkout against its upstream remote when an update is
-available, and surfaces what happened through the standard JSON envelope
-so SKILL.md can tell the user in one line.
+Runs once per 24 hours at Phase 0 Step 0. Fast-forwards the skill's git
+checkout against its upstream remote when an update is available, and
+surfaces what happened through the standard JSON envelope so SKILL.md
+can tell the user in one line.
+
+The throttle (24h, via `.last_update_check` timestamp in the skill
+root) mirrors the asta-skill pattern: a research session should not
+spend a network round-trip every single time the skill activates —
+daily is enough for git fast-forwards, and the user can always pass
+`--force` to bypass the throttle when they know something upstream
+changed.
 
 Design constraints (see CLAUDE.md, "The CLI contract"):
   - Never fails the workflow. Any error (offline, no remote, dirty tree,
@@ -20,24 +27,52 @@ Design constraints (see CLAUDE.md, "The CLI contract"):
   - The only script in this repo allowed to touch the skill's own files.
 
 Action values:
-  up_to_date        local HEAD == upstream HEAD
-  updated           fast-forward pull succeeded
-  update_available  --dry-run only; pull would succeed
-  skipped_dirty     working tree has uncommitted changes
-  skipped_disabled  SCHOLAR_SKIP_UPDATE_CHECK is set
-  not_a_git_repo    installed without .git (tarball, package manager)
-  check_failed      git/network error; `reason` field explains
+  up_to_date         local HEAD == upstream HEAD
+  updated            fast-forward pull succeeded
+  update_available   --dry-run only; pull would succeed
+  skipped_dirty      working tree has uncommitted changes
+  skipped_disabled   SCHOLAR_SKIP_UPDATE_CHECK is set
+  skipped_throttled  last check was within the 24h throttle window
+  not_a_git_repo     installed without .git (tarball, package manager)
+  check_failed       git/network error; `reason` field explains
 """
 from __future__ import annotations
 
 import argparse
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from _common import maybe_emit_schema, ok
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
+
+# 24-hour throttle window. The file stores a unix timestamp (float). Any
+# terminal action other than `check_failed` bumps the stamp; `check_failed`
+# leaves it alone so a transient failure (offline, rate-limit) is retried
+# on the next invocation rather than silently suppressed for a day.
+THROTTLE_FILE = SKILL_ROOT / ".last_update_check"
+THROTTLE_WINDOW_S = 24 * 60 * 60
+
+
+def throttle_age_s() -> float | None:
+    """Seconds since the last check, or None if the file is missing/bad."""
+    try:
+        stamp = float(THROTTLE_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    return time.time() - stamp
+
+
+def bump_throttle() -> None:
+    """Record the current wall-clock time into the throttle file."""
+    try:
+        THROTTLE_FILE.write_text(f"{time.time():.0f}\n")
+    except OSError:
+        # A read-only install (unusual — implies the whole skill dir is
+        # read-only) shouldn't prevent the workflow from continuing.
+        pass
 
 
 def run_git(*args: str) -> tuple[int, str, str]:
@@ -103,11 +138,16 @@ def main() -> None:
         description=(
             "Check for and apply updates to the scholar-deep-research "
             "skill. Always exits 0; the action field describes what "
-            "happened."
+            "happened. Self-throttles to once per 24 hours; pass --force "
+            "to bypass."
         )
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Check for updates but do not pull")
+    parser.add_argument("--force", action="store_true",
+                        help="Bypass the 24h throttle window — always "
+                             "perform the fetch/check even if the last "
+                             "check was recent.")
     maybe_emit_schema(parser, "check_update")
     args = parser.parse_args()
 
@@ -115,7 +155,21 @@ def main() -> None:
     if os.environ.get("SCHOLAR_SKIP_UPDATE_CHECK"):
         ok({"action": "skipped_disabled",
             "reason": "SCHOLAR_SKIP_UPDATE_CHECK is set"})
+        bump_throttle()
         return
+
+    # 24h throttle — a research session reactivating the skill every few
+    # minutes shouldn't burn a git fetch every time. --force overrides for
+    # manual/testing runs. --dry-run always checks (it doesn't mutate).
+    if not args.force and not args.dry_run:
+        age = throttle_age_s()
+        if age is not None and age < THROTTLE_WINDOW_S:
+            ok({"action": "skipped_throttled",
+                "reason": (f"Last check was {int(age)}s ago; throttle "
+                           f"window is {THROTTLE_WINDOW_S}s. Pass --force "
+                           f"to re-check now."),
+                "next_check_in_s": int(THROTTLE_WINDOW_S - age)})
+            return
 
     # Non-git install (ClawHub tarball, SkillsMP package, vendored copy).
     # The package manager owns updates for this install — we should not.
@@ -124,6 +178,7 @@ def main() -> None:
             "reason": ("No .git directory — skill is managed by a package "
                        "manager. Use its own update command."),
             "skill_root": str(SKILL_ROOT)})
+        bump_throttle()
         return
 
     local = local_head()
@@ -151,6 +206,7 @@ def main() -> None:
 
     if local == upstream:
         ok({"action": "up_to_date", "head": local[:12]})
+        bump_throttle()
         return
 
     behind = commits_behind(local, upstream)
@@ -171,9 +227,13 @@ def main() -> None:
             "commits_behind": behind,
             "requirements_changed": reqs_changed,
             "hint": f"Review: cd {SKILL_ROOT} && git status"})
+        bump_throttle()
         return
 
     if args.dry_run:
+        # Dry-run does not mutate state and does not write throttle —
+        # the caller is explicitly previewing, a real check should still
+        # follow on its normal schedule.
         ok({"action": "update_available",
             "dry_run": True,
             "from": local[:12],
@@ -203,6 +263,7 @@ def main() -> None:
                         "`pip install -r requirements.txt` before the "
                         "next invocation")
     ok(data)
+    bump_throttle()
 
 
 if __name__ == "__main__":

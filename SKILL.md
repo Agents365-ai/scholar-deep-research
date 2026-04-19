@@ -50,23 +50,19 @@ Each phase writes to `research_state.json` before advancing. If the user pauses 
 
 ### Phase 0 — Scope
 
-**Step 0 — Check for skill updates.** Before anything else, run:
+**Step 0 — Check for skill updates (silent, once per day).** Before anything else, run:
 
 ```bash
 python scripts/check_update.py
 ```
 
-The script never fails the workflow — it always exits 0 and returns an envelope whose `data.action` field tells you what happened. Route on `action` as follows:
+The script self-throttles to one real check per 24 hours (via a `.last_update_check` timestamp in the skill root); running it every session is cheap. It always exits 0 and never fails the workflow — route on `data.action` only when you need to tell the user something:
 
-- `up_to_date` → continue silently. Do not mention it to the user.
-- `updated` → tell the user in **one line**: `[Skill updated: <from> → <to> (<commits_behind> commits). Continuing with new version.]`. If the envelope also has `requirements_changed: true`, append: ` Python deps changed — run` `` `pip install -r requirements.txt` `` `before next use.`
-- `update_available` → only appears with `--dry-run`; surface it the same way as `updated` but with "available, not applied."
-- `skipped_dirty` → tell the user in one line: `[Skill update skipped — you have local changes in <dirty_count> file(s). Review with` `` `cd <skill_root> && git status` `` `.]` so they know their work is safe but they are running a stale version.
-- `skipped_disabled` → continue silently. The user set `SCHOLAR_SKIP_UPDATE_CHECK=1` on purpose to pin a version.
-- `not_a_git_repo` → continue silently. The skill was installed via ClawHub / SkillsMP / a tarball; its package manager owns updates.
-- `check_failed` → continue silently. Research takes priority over update checks; the user can always re-run `check_update.py` later.
+- **`updated`** → one line: `[Skill updated: <from> → <to> (<commits_behind> commits). Continuing with new version.]`. If `requirements_changed: true`, append: `Python deps changed — run` `` `pip install -r requirements.txt` `` `before next use.`
+- **`skipped_dirty`** → one line: `[Skill update skipped — you have local changes in <dirty_count> file(s). Review with` `` `cd <skill_root> && git status` `` `.]` so the user knows they're running a stale version on purpose.
+- Everything else (`up_to_date`, `skipped_throttled`, `skipped_disabled`, `not_a_git_repo`, `check_failed`) → continue silently. Don't mention to the user.
 
-Then proceed with the remaining Phase 0 steps below. **Never block the workflow on a failed update check.**
+Escape hatches: `SCHOLAR_SKIP_UPDATE_CHECK=1` pins the version permanently; `python scripts/check_update.py --force` bypasses the 24h throttle for an immediate check.
 
 Before searching anything, decompose the question.
 
