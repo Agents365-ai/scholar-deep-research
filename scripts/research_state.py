@@ -53,6 +53,7 @@ from typing import Any, Callable
 
 from _common import (
     EXIT_STATE, EXIT_VALIDATION, err, maybe_emit_schema, ok,
+    set_command_meta,
 )
 from _locking import StateLockTimeout, locked_rmw
 
@@ -251,11 +252,37 @@ def make_paper_id(paper: dict[str, Any]) -> str:
 
 def cmd_init(args: argparse.Namespace) -> None:
     path = Path(args.state)
-    if path.exists() and not args.force:
-        err("state_exists",
-            f"{path} already exists. Pass --force to overwrite.",
-            retryable=False, exit_code=EXIT_VALIDATION,
-            path=str(path))
+    if path.exists():
+        if not args.force:
+            err("state_exists",
+                f"{path} already exists. Pass --force to overwrite.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                path=str(path))
+        # --force alone is not enough: overwriting wipes every paper,
+        # query, selection, theme, tension, and the self-critique appendix.
+        # Require explicit --dangerous acknowledgement so a prompt-injected
+        # or confused agent cannot trivially destroy a research session.
+        if not args.dangerous:
+            existing_counts: dict[str, int] = {}
+            try:
+                prior = json.loads(path.read_text())
+                existing_counts = {
+                    "papers": len(prior.get("papers") or {}),
+                    "queries": len(prior.get("queries") or []),
+                    "selected_ids": len(prior.get("selected_ids") or []),
+                    "themes": len(prior.get("themes") or []),
+                    "tensions": len(prior.get("tensions") or []),
+                }
+            except (OSError, json.JSONDecodeError):
+                existing_counts = {"unreadable": 1}
+            err("confirmation_required",
+                f"{path} exists. --force will DESTROY the existing state "
+                f"(counts: {existing_counts}). Re-run with --force "
+                f"--dangerous to confirm.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                path=str(path),
+                existing=existing_counts,
+                confirm_with="--dangerous")
     state = {
         "schema_version": SCHEMA_VERSION,
         "question": args.question,
@@ -925,7 +952,15 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["literature_review", "systematic_review",
                             "scoping_review", "comparative_analysis",
                             "grant_background"])
-    s.add_argument("--force", action="store_true")
+    s.add_argument("--force", action="store_true",
+                   help="Overwrite an existing state file. DESTRUCTIVE. "
+                        "Must be paired with --dangerous.")
+    s.add_argument("--dangerous", action="store_true",
+                   help="Explicit acknowledgement required alongside --force. "
+                        "Without it, --force returns a confirmation_required "
+                        "envelope listing what would be destroyed.")
+    set_command_meta(s, since="0.1.0", tier="write",
+                     dangerous_if="force + dangerous")
     s.set_defaults(func=cmd_init)
 
     s = sub.add_parser("ingest", help="Ingest search results from a JSON file")
