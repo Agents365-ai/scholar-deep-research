@@ -274,3 +274,111 @@ GATES: dict[int, Callable[..., GateResult]] = {
     6: gate_6,
     7: gate_7,
 }
+
+
+# Per-check remediation hints. When a gate fails, cmd_advance looks up each
+# failing check's name in this table and surfaces the listed commands under
+# the envelope's `next` slot, per the skill's "reducing agent round-trips"
+# guidance. Hints are generic shell snippets; the advance handler fills in
+# the state path so the host LLM can copy-paste or pipe.
+#
+# Add more hints as gates are refined. Unknown check names silently yield
+# no hint — failure is still visible in the `checks` list.
+_NEXT_HINTS: dict[str, list[str]] = {
+    # G1
+    "question_set": [
+        "python scripts/research_state.py --state {state} init "
+        "--question '...' --archetype literature_review",
+    ],
+    "archetype_valid": [
+        "python scripts/research_state.py --state {state} set "
+        "--field archetype --value '\"literature_review\"'",
+    ],
+    "state_initialized": [
+        "python scripts/research_state.py --state {state} init "
+        "--question '...' --archetype literature_review --force --dangerous",
+    ],
+    # G2
+    "sources_breadth": [
+        "python scripts/search_arxiv.py --query '...' --state {state} --round N",
+        "python scripts/search_crossref.py --query '...' --state {state} --round N",
+        "python scripts/search_pubmed.py --query '...' --state {state} --round N",
+    ],
+    "saturation_overall": [
+        "python scripts/search_openalex.py --query '<next cluster>' --state {state} --round N",
+        "python scripts/research_state.py --state {state} saturation",
+    ],
+    # G3
+    "ranking_recorded": [
+        "python scripts/rank_papers.py --state {state}",
+    ],
+    "selection_non_empty": [
+        "python scripts/research_state.py --state {state} select --top 20",
+    ],
+    "selected_have_score_components": [
+        "python scripts/rank_papers.py --state {state}",
+    ],
+    # G4
+    "deep_read_coverage": [
+        "python scripts/extract_pdf.py --doi '<doi>' --state {state}",
+        "python scripts/research_state.py --state {state} evidence "
+        "--id '<paper_id>' --method '...' --depth full",
+    ],
+    "depth_marks_valid": [
+        "python scripts/research_state.py --state {state} evidence "
+        "--id '<paper_id>' --method '...' --depth shallow",
+    ],
+    # G5
+    "citation_chase_run": [
+        "python scripts/build_citation_graph.py --state {state} "
+        "--seed-top 5 --direction both",
+    ],
+    "citation_chase_productive": [
+        "python scripts/build_citation_graph.py --state {state} "
+        "--seed-top 8 --direction both --cited-by-limit 100",
+    ],
+    # G6
+    "themes_defined": [
+        "python scripts/research_state.py --state {state} theme "
+        "--name '<theme>' --summary '...' --paper-ids ...",
+    ],
+    "tensions_or_acknowledgment": [
+        "python scripts/research_state.py --state {state} tension "
+        "--topic '<topic>' --sides '[{\"position\": \"...\", \"paper_ids\": [...]}, ...]'",
+        "python scripts/research_state.py --state {state} critique "
+        "--finding 'no_tensions: <reason>'",
+    ],
+    # G7
+    "critique_appendix_written": [
+        "python scripts/research_state.py --state {state} critique "
+        "--appendix '<adversarial review text>'",
+    ],
+    "findings_resolved": [
+        "python scripts/research_state.py --state {state} critique "
+        "--resolve '<how each finding was addressed>'",
+    ],
+}
+
+
+def next_hints_for(checks: list[Check], state_path: str) -> list[str]:
+    """Suggested follow-up commands for the failing checks in `checks`.
+
+    The host LLM can read this directly off the envelope and does not need
+    a separate discovery turn to work out what to do next. Placeholders
+    like `'...'` and `<topic>` are intentional — the agent fills them in
+    from its own reasoning; we only know the shape of the command.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in checks:
+        if c.ok:
+            continue
+        for hint in _NEXT_HINTS.get(c.name, []):
+            # Plain .replace rather than .format so literal `{...}` in JSON
+            # argument snippets (e.g. the tension --sides example) doesn't
+            # collide with str.format's placeholder syntax.
+            cmd = hint.replace("{state}", state_path)
+            if cmd not in seen:
+                out.append(cmd)
+                seen.add(cmd)
+    return out

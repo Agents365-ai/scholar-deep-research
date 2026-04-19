@@ -810,7 +810,7 @@ def cmd_advance(args: argparse.Namespace) -> None:
     """
     # Import lazily so `--schema` works on machines where `_gates.py` is
     # still absent (shouldn't happen, but harmless).
-    from _gates import GATES
+    from _gates import GATES, next_hints_for
 
     state = load_state(Path(args.state))
     current = state.get("phase", 0)
@@ -845,12 +845,14 @@ def cmd_advance(args: argparse.Namespace) -> None:
 
     if not result.met:
         failures = [c.name for c in result.checks if not c.ok]
+        next_cmds = next_hints_for(result.checks, args.state)
         err("gate_not_met",
             f"Gate G{target} for phase {current} → {target} is not met. "
             f"Failing checks: {failures}.",
             retryable=False, exit_code=EXIT_VALIDATION,
             gate=result.to_dict(),
-            current=current, target=target)
+            current=current, target=target,
+            next=next_cmds)
 
     if args.check_only:
         ok({"check_only": True, "gate": result.to_dict(),
@@ -1056,6 +1058,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "Omit to advance by one.")
     s.add_argument("--check-only", action="store_true",
                    help="Run the gate, emit the result, do NOT write.")
+    set_command_meta(s, since="0.4.0", tier="write")
     s.set_defaults(func=cmd_advance)
 
     s = sub.add_parser("query", help="Read a slice of state")
