@@ -18,7 +18,8 @@ import argparse
 import os
 from typing import Any
 
-import httpx
+# `httpx` is imported lazily inside network-calling helpers so that
+# `--schema` introspection works on machines without httpx installed.
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
@@ -31,6 +32,8 @@ ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 
 def search(query: str, limit: int, api_key: str | None,
            year_from: int | None, year_to: int | None) -> list[dict]:
+    import httpx  # lazy: keeps --schema working on httpx-less machines
+
     term = query
     if year_from or year_to:
         a = year_from or 1900

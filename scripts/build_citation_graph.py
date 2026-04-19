@@ -22,7 +22,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
+# `httpx` is imported lazily inside network-calling helpers so that
+# `--schema` introspection works on machines without httpx installed.
 
 from _common import (
     EXIT_VALIDATION, USER_AGENT, UpstreamError, command_signature, err,
@@ -34,6 +35,7 @@ WORKS = "https://api.openalex.org/works"
 
 
 def fetch_work(oa_id: str, email: str | None) -> dict | None:
+    import httpx  # lazy
     headers = {"User-Agent": USER_AGENT}
     params = {}
     if email:
@@ -54,6 +56,7 @@ def fetch_work(oa_id: str, email: str | None) -> dict | None:
 
 def fetch_referenced(oa_ids: list[str], email: str | None) -> list[dict]:
     """Batch-fetch referenced works by OpenAlex IDs (limit 25 per request via filter)."""
+    import httpx  # lazy
     out = []
     chunk = 25
     headers = {"User-Agent": USER_AGENT}
@@ -78,6 +81,7 @@ def fetch_referenced(oa_ids: list[str], email: str | None) -> list[dict]:
 
 
 def fetch_cited_by(oa_id: str, limit: int, email: str | None) -> list[dict]:
+    import httpx  # lazy
     headers = {"User-Agent": USER_AGENT}
     params: dict[str, Any] = {
         "filter": f"cites:{oa_id}",

@@ -15,7 +15,8 @@ import argparse
 import os
 from typing import Any
 
-import httpx
+# `httpx` is imported lazily inside network-calling helpers so that
+# `--schema` introspection works on machines without httpx installed.
 
 from _common import (
     USER_AGENT, UpstreamError, make_paper, make_payload, emit, err,
@@ -27,6 +28,8 @@ API = "https://api.openalex.org/works"
 
 def search(query: str, limit: int, email: str | None,
            year_from: int | None, year_to: int | None) -> list[dict[str, Any]]:
+    import httpx  # lazy: keeps --schema working on httpx-less machines
+
     params: dict[str, Any] = {
         "search": query,
         "per-page": min(limit, 200),
