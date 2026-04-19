@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from _common import EXIT_VALIDATION, err, maybe_emit_schema, ok
+from _common import EXIT_VALIDATION, err, maybe_emit_schema, ok, stdout_is_tty
 from research_state import load_state
 
 STOPWORDS = {"the", "a", "an", "of", "and", "in", "on", "for", "to", "with",
@@ -159,6 +159,10 @@ def main() -> None:
     p.add_argument("--output", help="Write to file (default: stdout)")
     p.add_argument("--all", action="store_true",
                    help="Export all papers, not just selected ones")
+    p.add_argument("--raw", action="store_true",
+                   help="Force raw text on stdout (no envelope). Useful for "
+                        "shell pipelines like `export_bibtex.py --raw > refs.bib`. "
+                        "Default: raw when stdout is a TTY, envelope otherwise.")
     p.add_argument("--schema", action="store_true",
                    help="Print this command's parameter schema as JSON and exit")
     maybe_emit_schema(p, "export_bibtex")
@@ -188,13 +192,22 @@ def main() -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text)
         ok({"output": str(out), "format": args.format, "count": len(papers)})
-    else:
-        # No --output: write the raw bib/ris/csl text to stdout for pipe use
-        # (e.g. `export_bibtex.py --format bibtex > refs.bib`). This is the
-        # one command in the surface that does not emit an envelope on its
-        # default path — pipe compatibility is the reason. Agents should
-        # always pass --output to get a structured response.
+        return
+
+    # No --output: decide raw text vs envelope by TTY (unless --raw forced).
+    # This preserves the `export_bibtex.py --raw > refs.bib` human pipeline
+    # while guaranteeing an envelope when an agent captures stdout without
+    # knowing to pass --output. Default on an interactive terminal is raw
+    # (the pretty-printed JSON envelope is less useful there); default for
+    # a piped / captured stdout is the envelope with the body inline.
+    if args.raw or stdout_is_tty():
         sys.stdout.write(text)
+    else:
+        ok({
+            "format": args.format,
+            "count": len(papers),
+            "body": text,
+        })
 
 
 if __name__ == "__main__":
