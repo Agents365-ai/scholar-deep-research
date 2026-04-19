@@ -29,7 +29,7 @@ from _common import (
     EXIT_VALIDATION, USER_AGENT, UpstreamError, command_signature, err,
     make_paper, make_payload, maybe_emit_schema, ok, read_cache, write_cache,
 )
-from research_state import load_state, make_paper_id, save_state, now_iso
+from research_state import apply_citation_chase, load_state, make_paper_id
 
 WORKS = "https://api.openalex.org/works"
 
@@ -227,38 +227,15 @@ def main() -> None:
             for w in cited_by:
                 new_records.append(normalize(w))
 
-    # Merge new records into state, marking discovered_via
-    added = 0
-    merged = 0
-    for rec in new_records:
-        pid = make_paper_id(rec)
-        rec["id"] = pid
-        rec.setdefault("source", ["openalex"])
-        rec.setdefault("first_seen_round", state["queries"][-1]["round"]
-                       if state["queries"] else 1)
-        rec["discovered_via"] = "citation_chase"
-        rec.setdefault("selected", False)
-        rec.setdefault("depth", "shallow")
-        if pid in state["papers"]:
-            existing = state["papers"][pid]
-            for k in ("doi", "abstract", "pdf_url", "url", "venue"):
-                if not existing.get(k) and rec.get(k):
-                    existing[k] = rec[k]
-            merged += 1
-        else:
-            state["papers"][pid] = rec
-            added += 1
-
-    state["queries"].append({
-        "source": "openalex_citation_chase",
-        "query": f"seeds={len(seeds)} direction={args.direction}",
-        "round": (state["queries"][-1]["round"] + 1) if state["queries"] else 1,
-        "hits": len(new_records),
-        "new": added,
-        "merged": merged,
-        "timestamp": now_iso(),
-    })
-    save_state(path, state)
+    # Merge + query-append runs under the state lock via apply_citation_chase.
+    summary = apply_citation_chase(
+        path,
+        new_records,
+        {
+            "source": "openalex_citation_chase",
+            "query": f"seeds={len(seeds)} direction={args.direction}",
+        },
+    )
 
     response = {
         "seeds": len(seeds),
@@ -266,9 +243,9 @@ def main() -> None:
         "skipped_seeds_without_openalex_id": skipped_seeds,
         "direction": args.direction,
         "fetched": len(new_records),
-        "added": added,
-        "merged": merged,
-        "total_papers": len(state["papers"]),
+        "added": summary["added"],
+        "merged": summary["merged"],
+        "total_papers": summary["total_papers"],
     }
 
     if args.idempotency_key:

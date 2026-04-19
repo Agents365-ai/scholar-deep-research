@@ -21,7 +21,6 @@ import argparse
 import hashlib
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -147,38 +146,23 @@ def emit(payload: dict[str, Any], output: str | None,
     """Write search payload to --output JSON and/or hand to research_state ingest.
 
     Always prints exactly one envelope to stdout:
-      - with --state: pass-through of `research_state.py ingest`'s envelope
+      - with --state: envelope from apply_ingest() (routed through the state lock)
       - with --output only: {"ok": true, "data": {"output": path, "count": N, ...}}
       - with neither: {"ok": true, "data": <payload>}
     """
-    tmp: Path | None = None
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-        tmp = out_path
 
     if state:
-        # If we don't already have a file, write a temp path for subprocess ingest.
-        if tmp is None:
-            tmp = Path(".search_payload.tmp.json")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False))
-        here = Path(__file__).resolve().parent
-        result = subprocess.run(
-            [sys.executable, str(here / "research_state.py"),
-             "--state", state, "ingest", "--input", str(tmp)],
-            capture_output=True, text=True,
-        )
-        # research_state.py ingest emits its own ok/err envelope — pass it through.
-        sys.stdout.write(result.stdout)
-        if result.returncode != 0:
-            sys.stderr.write(result.stderr)
-            sys.exit(result.returncode)
-        if tmp == Path(".search_payload.tmp.json"):
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+        # Call apply_ingest directly — no subprocess, no shared temp file.
+        # Concurrent searches are serialized by the state lock inside
+        # apply_ingest, so Phase 1 fanout is race-free.
+        # Lazy import avoids a circular dependency at module load.
+        from research_state import apply_ingest
+        summary = apply_ingest(Path(state), payload)
+        ok(summary)
         return
 
     if output:

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from _common import maybe_emit_schema, ok
-from research_state import load_state, save_state, normalize_title
+from research_state import apply_dedupe, load_state, normalize_title
 
 
 def first_author_key(p: dict[str, Any]) -> str:
@@ -135,35 +135,10 @@ def main() -> None:
         else:
             new_papers[new_id] = merged
 
-    def remap(pid: str) -> str:
-        return id_remap.get(pid, pid)
-
-    # Rewrite every ID-bearing collection with the remap. Order matters: papers
-    # must be swapped together with its dependents so state is self-consistent
-    # if a later phase queries right after dedupe.
-    state["papers"] = new_papers
-    if state.get("selected_ids"):
-        rewritten: list[str] = []
-        seen: set[str] = set()
-        for pid in state["selected_ids"]:
-            new_pid = remap(pid)
-            if new_pid in new_papers and new_pid not in seen:
-                rewritten.append(new_pid)
-                seen.add(new_pid)
-        state["selected_ids"] = rewritten
-    for theme in state.get("themes", []):
-        if "paper_ids" in theme:
-            theme["paper_ids"] = sorted({
-                remap(pid) for pid in theme["paper_ids"] if remap(pid) in new_papers
-            })
-    for tension in state.get("tensions", []):
-        for side in tension.get("sides", []):
-            if "paper_ids" in side:
-                side["paper_ids"] = sorted({
-                    remap(pid) for pid in side["paper_ids"] if remap(pid) in new_papers
-                })
-
-    save_state(path, state)
+    # The swap-and-rewrite of papers/selected_ids/themes/tensions runs under
+    # the state lock inside apply_dedupe so a concurrent reader never sees
+    # state["papers"] without the matching remap.
+    apply_dedupe(path, new_papers, id_remap)
     ok({
         "before": len(papers),
         "after": len(new_papers),

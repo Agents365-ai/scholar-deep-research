@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from _common import maybe_emit_schema, ok
-from research_state import load_state, save_state
+from research_state import apply_ranking, load_state
 
 # Tier-1 venues. Conservative; users should extend per field.
 TIER1_VENUES = {
@@ -122,6 +122,8 @@ def main() -> None:
         f"+ {args.delta}·venue_prior"
     )
 
+    scored_papers: dict[str, dict[str, Any]] = {}
+    previews: list[dict[str, Any]] = []
     for pid, paper in state["papers"].items():
         rel = relevance(question, paper)
         cit = cite_score(paper.get("citations"))
@@ -131,15 +133,26 @@ def main() -> None:
                  + args.beta * cit
                  + args.gamma * rec
                  + args.delta * ven)
-        paper["score"] = round(score, 4)
-        paper["score_components"] = {
-            "relevance": round(rel, 4),
-            "citations": round(cit, 4),
-            "recency": round(rec, 4),
-            "venue": round(ven, 4),
+        scored_papers[pid] = {
+            "score": round(score, 4),
+            "score_components": {
+                "relevance": round(rel, 4),
+                "citations": round(cit, 4),
+                "recency": round(rec, 4),
+                "venue": round(ven, 4),
+            },
         }
+        previews.append({
+            "id": pid,
+            "title": paper.get("title"),
+            "year": paper.get("year"),
+            "venue": paper.get("venue"),
+            "citations": paper.get("citations"),
+            "score": scored_papers[pid]["score"],
+            "components": scored_papers[pid]["score_components"],
+        })
 
-    state["ranking"] = {
+    meta = {
         "formula": formula,
         "weights": {
             "alpha": args.alpha, "beta": args.beta,
@@ -148,30 +161,18 @@ def main() -> None:
         "half_life": args.half_life,
         "ranked_at": datetime.now().isoformat(timespec="seconds"),
     }
-    save_state(path, state)
+    apply_ranking(path, scored_papers, meta)
 
-    ranked = sorted(state["papers"].values(),
-                    key=lambda x: x.get("score", 0), reverse=True)
-    top = ranked[: args.top]
+    previews.sort(key=lambda p: p["score"], reverse=True)
+    top = previews[: args.top]
     ok({
         "formula": formula,
-        "ranked": len(state["papers"]),
+        "ranked": len(scored_papers),
         "weights": {
             "alpha": args.alpha, "beta": args.beta,
             "gamma": args.gamma, "delta": args.delta,
         },
-        "top": [
-            {
-                "id": p["id"],
-                "title": p.get("title"),
-                "year": p.get("year"),
-                "venue": p.get("venue"),
-                "citations": p.get("citations"),
-                "score": p.get("score"),
-                "components": p.get("score_components"),
-            }
-            for p in top
-        ],
+        "top": top,
     })
 
 

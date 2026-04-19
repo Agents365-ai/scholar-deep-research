@@ -126,15 +126,6 @@ def _locked_rmw(
             retryable=True, exit_code=EXIT_STATE, path=str(path))
 
 
-# `save_state` is a deprecated alias kept only for scripts (rank_papers,
-# dedupe_papers, build_citation_graph) that still write state directly.
-# It performs an atomic write but does NOT acquire the lock. Those scripts
-# are migrated to the locked library API (`apply_*`) in a follow-up; once
-# no import sites remain, this alias is removed.
-def save_state(path: Path, state: dict[str, Any]) -> None:
-    _save_state(path, state)
-
-
 # ---------- ID normalization ----------
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
@@ -210,6 +201,20 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     Input shape: {"source": "openalex", "query": "...", "round": 1, "papers": [...]}
     """
     payload = json.loads(Path(args.input).read_text())
+    summary = apply_ingest(Path(args.state), payload)
+    ok(summary)
+
+
+def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Library API for ingesting a search payload into state.
+
+    Called by the ingest subcommand AND by `_common.emit()` (which used to
+    spawn this script as a subprocess and pass a shared temp-file path —
+    that race is gone now). Serializes via the exclusive state lock, so
+    concurrent Phase 1 searches are safe.
+
+    Returns the ingestion summary dict (to be emitted by the caller).
+    """
     source = payload.get("source", "unknown")
     query = payload.get("query", "")
     rnd = payload.get("round", 1)
@@ -264,8 +269,145 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         })
         return state
 
-    _locked_rmw(Path(args.state), mutator)
-    ok(summary)
+    _locked_rmw(state_path, mutator)
+    return summary
+
+
+# ---------- library API for other scripts ----------
+#
+# Scripts that mutate state (rank_papers, dedupe_papers, build_citation_graph)
+# call these instead of writing the state file directly. The public `apply_*`
+# functions are the ONLY supported write path — `_save_state` is private and
+# only used from inside the lock. Together they enforce the "only research_state
+# writes the state file" invariant at the module boundary.
+
+def apply_ranking(
+    state_path: Path,
+    scored_papers: dict[str, dict[str, Any]],
+    meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply ranking scores + components to state.
+
+    `scored_papers` maps `paper_id -> {"score": float, "score_components": {...}}`.
+    `meta` is the ranking metadata dict (formula, weights, half_life, ranked_at).
+    Returns a summary dict with `ranked` count and formula.
+    """
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        for pid, scoring in scored_papers.items():
+            if pid in state["papers"]:
+                state["papers"][pid]["score"] = scoring["score"]
+                state["papers"][pid]["score_components"] = scoring["score_components"]
+        state["ranking"] = meta
+        return state
+
+    _locked_rmw(state_path, mutator)
+    return {"ranked": len(scored_papers), "formula": meta.get("formula")}
+
+
+def apply_dedupe(
+    state_path: Path,
+    new_papers: dict[str, dict[str, Any]],
+    id_remap: dict[str, str],
+) -> dict[str, Any]:
+    """Replace state.papers with `new_papers` and rewrite ID-bearing collections.
+
+    The rewrite uses `id_remap: {old_id -> new_id}`. References to IDs that
+    no longer exist in `new_papers` are dropped. Runs inside the lock so the
+    swap and the rewrite are atomic — a concurrent reader sees either the
+    pre-dedupe or the post-dedupe state, never a mix.
+    """
+    def remap(pid: str) -> str:
+        return id_remap.get(pid, pid)
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        state["papers"] = new_papers
+        if state.get("selected_ids"):
+            seen: set[str] = set()
+            rewritten: list[str] = []
+            for pid in state["selected_ids"]:
+                new_pid = remap(pid)
+                if new_pid in new_papers and new_pid not in seen:
+                    rewritten.append(new_pid)
+                    seen.add(new_pid)
+            state["selected_ids"] = rewritten
+        for theme in state.get("themes", []):
+            if "paper_ids" in theme:
+                theme["paper_ids"] = sorted({
+                    remap(pid) for pid in theme["paper_ids"]
+                    if remap(pid) in new_papers
+                })
+        for tension in state.get("tensions", []):
+            for side in tension.get("sides", []):
+                if "paper_ids" in side:
+                    side["paper_ids"] = sorted({
+                        remap(pid) for pid in side["paper_ids"]
+                        if remap(pid) in new_papers
+                    })
+        return state
+
+    _locked_rmw(state_path, mutator)
+    return {"after": len(new_papers), "ids_remapped": len(id_remap)}
+
+
+def apply_citation_chase(
+    state_path: Path,
+    new_records: list[dict[str, Any]],
+    query_entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge `new_records` into state.papers and append a chase query entry.
+
+    `query_entry` is a partial record: `source`, `query` (description), and
+    optionally `round` must be provided. `hits`, `new`, `merged`, and
+    `timestamp` are computed here.
+    """
+    summary: dict[str, Any] = {}
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        added = 0
+        merged = 0
+        for rec in new_records:
+            pid = make_paper_id(rec)
+            rec["id"] = pid
+            rec.setdefault("source", ["openalex"])
+            rec.setdefault(
+                "first_seen_round",
+                state["queries"][-1]["round"] if state["queries"] else 1,
+            )
+            rec["discovered_via"] = "citation_chase"
+            rec.setdefault("selected", False)
+            rec.setdefault("depth", "shallow")
+            if pid in state["papers"]:
+                existing = state["papers"][pid]
+                for k in ("doi", "abstract", "pdf_url", "url", "venue"):
+                    if not existing.get(k) and rec.get(k):
+                        existing[k] = rec[k]
+                merged += 1
+            else:
+                state["papers"][pid] = rec
+                added += 1
+
+        final_query = dict(query_entry)
+        if "round" not in final_query:
+            final_query["round"] = (
+                state["queries"][-1]["round"] + 1
+                if state["queries"] else 1
+            )
+        final_query["hits"] = len(new_records)
+        final_query["new"] = added
+        final_query["merged"] = merged
+        final_query["timestamp"] = now_iso()
+        state["queries"].append(final_query)
+
+        summary.update({
+            "added": added,
+            "merged": merged,
+            "total_papers": len(state["papers"]),
+            "round": final_query["round"],
+        })
+        return state
+
+    _locked_rmw(state_path, mutator)
+    return summary
 
 
 def cmd_select(args: argparse.Namespace) -> None:
@@ -503,6 +645,50 @@ def cmd_tension(args: argparse.Namespace) -> None:
     ok({"topic": args.topic, "total_tensions": total[0]})
 
 
+def cmd_rank(args: argparse.Namespace) -> None:
+    """Apply a ranking patch produced by rank_papers.py.
+
+    Patch shape: {"scored_papers": {pid: {score, score_components}}, "meta": {...}}.
+    This subcommand is for replay/audit — normal use is via rank_papers.py,
+    which calls apply_ranking() directly.
+    """
+    patch = json.loads(Path(args.patch).read_text())
+    summary = apply_ranking(
+        Path(args.state),
+        patch.get("scored_papers") or {},
+        patch.get("meta") or {},
+    )
+    ok(summary)
+
+
+def cmd_dedupe(args: argparse.Namespace) -> None:
+    """Apply a dedupe patch produced by dedupe_papers.py.
+
+    Patch shape: {"new_papers": {pid: paper}, "id_remap": {old_id: new_id}}.
+    """
+    patch = json.loads(Path(args.patch).read_text())
+    summary = apply_dedupe(
+        Path(args.state),
+        patch.get("new_papers") or {},
+        patch.get("id_remap") or {},
+    )
+    ok(summary)
+
+
+def cmd_citation_chase(args: argparse.Namespace) -> None:
+    """Apply a citation-chase patch produced by build_citation_graph.py.
+
+    Patch shape: {"new_records": [...], "query_entry": {source, query, ...}}.
+    """
+    patch = json.loads(Path(args.patch).read_text())
+    summary = apply_citation_chase(
+        Path(args.state),
+        patch.get("new_records") or [],
+        patch.get("query_entry") or {},
+    )
+    ok(summary)
+
+
 def cmd_critique(args: argparse.Namespace) -> None:
     final_crit: dict[str, Any] = {}
 
@@ -590,6 +776,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--relevance")
     s.add_argument("--depth", choices=["full", "shallow"], default="full")
     s.set_defaults(func=cmd_evidence)
+
+    # Replay/audit subcommands: apply a pre-computed patch from a JSON file.
+    # Normal usage is via rank_papers.py / dedupe_papers.py / build_citation_graph.py,
+    # which call the apply_* functions directly. These exist so a failed
+    # mutation can be replayed from the patch file without re-running the
+    # (sometimes network-bound) compute step.
+    s = sub.add_parser("rank", help="Apply a ranking patch JSON")
+    s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.set_defaults(func=cmd_rank)
+
+    s = sub.add_parser("dedupe", help="Apply a dedupe patch JSON")
+    s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.set_defaults(func=cmd_dedupe)
+
+    s = sub.add_parser("citation-chase", help="Apply a citation-chase patch JSON")
+    s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.set_defaults(func=cmd_citation_chase)
 
     s = sub.add_parser("theme", help="Add a theme")
     s.add_argument("--name", required=True)
