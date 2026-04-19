@@ -59,9 +59,11 @@ from _locking import StateLockTimeout, locked_rmw
 SCHEMA_VERSION = 1
 
 # Whitelist of fields `set` is permitted to write. `papers`, `queries`,
-# `self_critique`, and everything else must be mutated through the dedicated
-# commands so an agent cannot silently wipe the corpus via `set --field papers`.
-SETTABLE_FIELDS = {"phase", "archetype", "report_path"}
+# `self_critique`, `phase`, and everything else must be mutated through the
+# dedicated commands so an agent cannot silently wipe the corpus via
+# `set --field papers`, or skip a gate via `set --field phase`. Phase changes
+# go through `advance`, which runs the G1..G7 gate predicates in `_gates.py`.
+SETTABLE_FIELDS = {"archetype", "report_path"}
 
 
 # ---------- IO ----------
@@ -514,66 +516,74 @@ def cmd_select(args: argparse.Namespace) -> None:
     ok({"selected": len(chosen_ids), "ids": chosen_ids})
 
 
-def cmd_saturation(args: argparse.Namespace) -> None:
-    """Check whether discovery has saturated, evaluated per source.
+class SaturationInputError(Exception):
+    """Raised by compute_saturation when input state is unusable.
 
-    A single source is saturated when ALL of:
-      - it has been queried at least `--min-rounds` times (default 2), AND
-      - its last round's `new` count is < `--threshold`% of its last round's
-        `hits`, AND
-      - no paper first seen in that last round (and linked to this source)
-        has more than `--max-citations` citations.
-
-    `overall_saturated` is True only when every queried source individually
-    satisfies the rule — the gate that P1 #10 from the review targets.
-
-    The old single-source check was broken for multi-source discovery: it
-    read only `queries[-1]` and would fire "saturated" after one quiet
-    source even when others were still producing new papers.
+    `code` is the stable error code to surface; `ctx` carries extra
+    context fields for the envelope. Callers either route to `err()`
+    (cmd_saturation) or treat as "not saturated" (gate_2).
     """
-    state = load_state(Path(args.state))
-    if not state["queries"]:
-        err("no_queries",
-            "No queries recorded yet. Run a search first.",
-            retryable=False, exit_code=EXIT_VALIDATION)
 
-    # Group queries by source, preserving insertion order within each bucket.
+    def __init__(self, code: str, message: str, **ctx: Any):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.ctx = ctx
+
+
+def compute_saturation(
+    state: dict[str, Any],
+    *,
+    threshold: float = 20.0,
+    max_citations: int = 100,
+    min_rounds: int = 2,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Pure function: compute saturation per-source and overall.
+
+    Factored out of `cmd_saturation` so gate_2 can reuse the same logic.
+    Raises `SaturationInputError` for `no_queries` / `source_not_queried`
+    instead of calling `err()`, so callers control the envelope (cmd_
+    wraps it; gate_2 catches and treats as not-saturated).
+    """
+    if not state["queries"]:
+        raise SaturationInputError(
+            "no_queries",
+            "No queries recorded yet. Run a search first.",
+        )
+
     by_source: dict[str, list[dict[str, Any]]] = {}
     for q in state["queries"]:
         by_source.setdefault(q["source"], []).append(q)
 
-    if args.source:
-        if args.source not in by_source:
-            err("source_not_queried",
-                f"Source '{args.source}' has no queries in state.",
-                retryable=False, exit_code=EXIT_VALIDATION,
-                source=args.source,
-                available=sorted(by_source.keys()))
-        by_source = {args.source: by_source[args.source]}
+    if source:
+        if source not in by_source:
+            raise SaturationInputError(
+                "source_not_queried",
+                f"Source '{source}' has no queries in state.",
+                source=source,
+                available=sorted(by_source.keys()),
+            )
+        by_source = {source: by_source[source]}
 
     per_source: dict[str, dict[str, Any]] = {}
-    for source, queries in by_source.items():
+    for src, queries in by_source.items():
         last = queries[-1]
         rounds_run = len(queries)
         hits = last.get("hits", 0) or 0
         new = last.get("new", 0) or 0
         pct_new = (new / hits * 100) if hits else 0.0
-        # Max citations among papers linked to this source that were first
-        # seen globally in the same round number as this source's last round.
-        # This is an approximation — the `round` field in query entries is
-        # not strictly per-source — but paired with the `source in p.source`
-        # filter it's correct whenever rounds don't alias across sources.
         max_cit = 0
         for p in state["papers"].values():
             if (p.get("first_seen_round") == last["round"]
-                    and source in (p.get("source") or [])):
+                    and src in (p.get("source") or [])):
                 max_cit = max(max_cit, p.get("citations") or 0)
         saturated = (
-            rounds_run >= args.min_rounds
-            and pct_new < args.threshold
-            and max_cit < args.max_citations
+            rounds_run >= min_rounds
+            and pct_new < threshold
+            and max_cit < max_citations
         )
-        per_source[source] = {
+        per_source[src] = {
             "rounds_run": rounds_run,
             "last_round": last["round"],
             "last_query": last.get("query", ""),
@@ -587,13 +597,41 @@ def cmd_saturation(args: argparse.Namespace) -> None:
     overall_saturated = bool(per_source) and all(
         ps["saturated"] for ps in per_source.values()
     )
-    ok({
+    return {
         "per_source": per_source,
         "overall_saturated": overall_saturated,
-        "threshold_pct": args.threshold,
-        "max_citations_threshold": args.max_citations,
-        "min_rounds": args.min_rounds,
-    })
+        "threshold_pct": threshold,
+        "max_citations_threshold": max_citations,
+        "min_rounds": min_rounds,
+    }
+
+
+def cmd_saturation(args: argparse.Namespace) -> None:
+    """Check whether discovery has saturated, evaluated per source.
+
+    A single source is saturated when ALL of:
+      - it has been queried at least `--min-rounds` times (default 2), AND
+      - its last round's `new` count is < `--threshold`% of its last round's
+        `hits`, AND
+      - no paper first seen in that last round (and linked to this source)
+        has more than `--max-citations` citations.
+
+    `overall_saturated` is True only when every queried source individually
+    satisfies the rule — the gate that P1 #10 from the review targets.
+    """
+    state = load_state(Path(args.state))
+    try:
+        result = compute_saturation(
+            state,
+            threshold=args.threshold,
+            max_citations=args.max_citations,
+            min_rounds=args.min_rounds,
+            source=args.source,
+        )
+    except SaturationInputError as exc:
+        err(exc.code, exc.message,
+            retryable=False, exit_code=EXIT_VALIDATION, **exc.ctx)
+    ok(result)
 
 
 def cmd_set(args: argparse.Namespace) -> None:
@@ -727,6 +765,80 @@ def cmd_tension(args: argparse.Namespace) -> None:
     ok({"topic": args.topic, "total_tensions": total[0]})
 
 
+def cmd_advance(args: argparse.Namespace) -> None:
+    """Advance the phase by one, iff the gate for the target phase is met.
+
+    Replaces the former `set --field phase <N>` path, which let hosts skip
+    gates. The target is always `current + 1`; `--to` is accepted only for
+    forward compatibility (must equal current + 1) and to make intent
+    explicit in logs. `--check-only` runs the gate without writing.
+    """
+    # Import lazily so `--schema` works on machines where `_gates.py` is
+    # still absent (shouldn't happen, but harmless).
+    from _gates import GATES
+
+    state = load_state(Path(args.state))
+    current = state.get("phase", 0)
+    target = args.to if args.to is not None else current + 1
+
+    if target <= current:
+        err("phase_not_advancing",
+            f"Cannot advance to phase {target} from current phase {current}. "
+            f"Target must be current+1. Use `init --force` to reset.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            current=current, requested=target)
+    if target - current > 1:
+        err("phase_skip_forbidden",
+            f"Cannot skip gates: target phase {target} is more than one "
+            f"step past current phase {current}. Advance one gate at a time.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            current=current, requested=target)
+    if target not in GATES:
+        err("unknown_gate",
+            f"No gate defined for target phase {target}. "
+            f"Valid targets: {sorted(GATES.keys())}.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            requested=target, valid=sorted(GATES.keys()))
+
+    # gate_2 needs compute_saturation; others don't — pass it as kwarg when
+    # the gate's signature expects it.
+    gate_fn = GATES[target]
+    if target == 2:
+        result = gate_fn(state, compute_saturation=compute_saturation)
+    else:
+        result = gate_fn(state)
+
+    if not result.met:
+        failures = [c.name for c in result.checks if not c.ok]
+        err("gate_not_met",
+            f"Gate G{target} for phase {current} → {target} is not met. "
+            f"Failing checks: {failures}.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            gate=result.to_dict(),
+            current=current, target=target)
+
+    if args.check_only:
+        ok({"check_only": True, "gate": result.to_dict(),
+            "current": current, "target": target, "met": True})
+        return
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        # Re-check current phase under the lock to avoid TOCTOU: another
+        # process could have advanced while we were computing the gate.
+        if state.get("phase", 0) != current:
+            err("phase_raced",
+                f"Phase changed under the lock (was {current}, now "
+                f"{state.get('phase')}). Re-run advance.",
+                retryable=True, exit_code=EXIT_STATE,
+                current_actual=state.get("phase"), expected=current)
+        state["phase"] = target
+        return state
+
+    _locked_rmw(Path(args.state), mutator)
+    ok({"advanced": True, "from": current, "to": target,
+        "gate": result.to_dict()})
+
+
 def cmd_rank(args: argparse.Namespace) -> None:
     """Apply a ranking patch produced by rank_papers.py.
 
@@ -840,10 +952,24 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Check a single source only (default: all sources)")
     s.set_defaults(func=cmd_saturation)
 
-    s = sub.add_parser("set", help="Set a top-level field (e.g., phase)")
+    s = sub.add_parser(
+        "set",
+        help=f"Set a whitelisted top-level field ({sorted(SETTABLE_FIELDS)})",
+    )
     s.add_argument("--field", required=True)
     s.add_argument("--value", required=True)
     s.set_defaults(func=cmd_set)
+
+    s = sub.add_parser(
+        "advance",
+        help="Advance phase by one if the target gate (G1..G7) passes.",
+    )
+    s.add_argument("--to", type=int,
+                   help="Explicit target phase (must be current+1). "
+                        "Omit to advance by one.")
+    s.add_argument("--check-only", action="store_true",
+                   help="Run the gate, emit the result, do NOT write.")
+    s.set_defaults(func=cmd_advance)
 
     s = sub.add_parser("query", help="Read a slice of state")
     s.add_argument("what", choices=["summary", "selected", "papers", "queries",

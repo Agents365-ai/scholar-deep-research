@@ -5,7 +5,7 @@ license: MIT
 homepage: https://github.com/Agents365-ai/scholar-deep-research
 compatibility: Requires Python 3.9+ with httpx and pypdf (see requirements.txt). Works offline-first (no MCP required) but enriches with Semantic Scholar / Brave MCP tools when available.
 platforms: [macos, linux, windows]
-metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.3.0"}
+metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.4.0"}
 ---
 
 # Scholar Deep Research
@@ -357,17 +357,24 @@ See `scripts/research_state.py --help` for the full schema.
 
 ## Completion gates
 
-Each phase has a gate. Do not advance until the gate passes.
+Each phase transition has a gate (G1..G7). Advance ONLY via:
 
-| Phase | Gate |
-|-------|------|
-| 0 → 1 | Question restated, archetype chosen, ≥3 keyword clusters, state initialized |
-| 1 → 2 | Saturation hit on primary source AND ≥3 sources consulted |
-| 2 → 3 | Top-N selected with score components recorded |
-| 3 → 4 | ≥80% of top-N have `depth: full` (rest explicitly marked `shallow`) |
-| 4 → 5 | Citation graph expanded ≥1 depth on top 5 seeds |
-| 5 → 6 | ≥3 themes defined, ≥1 tension documented (or explicit "no tensions found") |
-| 6 → 7 | Self-critique appendix written, all unanchored claims resolved |
+```bash
+python scripts/research_state.py --state <path> advance          # advance by 1
+python scripts/research_state.py --state <path> advance --check-only   # preview only
+```
+
+The gate predicates are enforced in `scripts/_gates.py`. Direct `set --field phase` is rejected — the `phase` field is no longer settable. If the gate fails, the envelope lists the failing checks by name so you know exactly what's missing.
+
+| Target | Gate (enforced) |
+|--------|-----------------|
+| G1 (→ 1) | Question set, archetype valid, state initialized. *`≥3 keyword clusters` is host-checked.* |
+| G2 (→ 2) | `overall_saturated == true` across all queried sources AND ≥3 distinct sources in `state.queries`. |
+| G3 (→ 3) | `state.ranking` recorded; `selected_ids` non-empty; every selected paper has `score_components`. |
+| G4 (→ 4) | All selected papers have `depth ∈ {full, shallow}` AND ≥80% are `depth=full`. |
+| G5 (→ 5) | ≥1 query with `source=openalex_citation_chase` and `hits > 0`. |
+| G6 (→ 6) | `len(themes) ≥ 3` AND (`len(tensions) ≥ 1` OR a critique finding mentioning "no tensions"). |
+| G7 (→ 7) | `state.self_critique.appendix` non-empty; `len(resolved) ≥ len(findings)`. |
 
 ## Enrichment with MCP tools
 
