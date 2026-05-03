@@ -9,12 +9,14 @@ An 8-phase (Phase 0..7), script-driven academic research workflow that turns a r
 - **End-to-end research** — from question decomposition (Phase 0) to a finished report with bibliography (Phase 7), with 7 enforced phase-transition gates in between
 - **Agent-native CLI** — structured JSON envelopes with `request_id` / `latency_ms` / `cli_version` on every response; `--idempotency-key` on every mutating command; `--dry-run` previews; destructive operations (`init --force`) gated behind a paired `--dangerous` acknowledgement; gate failures carry a `next: [commands]` hint so agents recover without a discovery round-trip
 - **Parallel deep-read fan-out (Phase 3)** — selected papers split into `deep` / `skim` / `defer` tiers via deterministic triage. Deep tier dispatched in parallel waves of 8–10 agents, each reading one PDF in an isolated context bubble and writing structured evidence back through the exclusive-locked CLI. Skim tier auto-fills an abstract-derived evidence stub — no agent fan-out needed. Tunable via `--deep-ratio` / `--skim-ratio`; defaults shave roughly 50% off Phase 3 cost without losing coverage
+- **PDF prefetch ahead of fan-out** — optional `prefetch_pdfs.py` step at the close of Phase 2 pulls every deep-tier PDF into a stable cache (via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) with Unpaywall fallback) using `ThreadPoolExecutor` concurrency. Phase 3 agents then read a local file path instead of running their own download, and OA-chain failures surface as structured `pdf_status` records on the paper *before* dispatch — so a wave never starts only to discover half the PDFs are paywalled
 - **4 federated sources** — OpenAlex (primary, free, 240M+ works), arXiv (preprints), Crossref (DOI metadata), PubMed (biomedical)
 - **Transparent ranking** — papers are scored with a published formula (`α·relevance + β·citations + γ·recency + δ·venue_prior`), components written into state
 - **Deduplication across sources** — DOI-first, then title-similarity merge; one paper, one record
 - **Citation chasing (snowball)** — forward + backward graph expansion via OpenAlex
 - **Persistent state file** — `research_state.json` tracks every query, paper, decision, and phase. Research is resumable and auditable
-- **Saturation-based stop signal** — discovery ends when a new round adds <20% novel papers AND no new paper has >100 citations
+- **Three-axis saturation stop signal** — discovery ends only when *all* of paper-novelty (<20%), author-novelty (<25%), and venue-novelty (<30%) fall below threshold per source. Catches the failure mode where a query keeps surfacing different papers from the same lab or venue while exploration has actually stalled. Sources that don't report venues (e.g. arXiv) drop the venue axis cleanly via vacuous truth
+- **Phase 1 budget envelope** — env-var-set caps on Phase 1 ingest (`SCHOLAR_PHASE1_MAX_ROUNDS` default 5, `SCHOLAR_PHASE1_MAX_REQUESTS_PER_SOURCE` default 20) prevent runaway agent loops. Trust boundary: agents cannot raise their own ceiling — a confused loop hits the cap and gets a structured `phase1_budget_exhausted` error rather than silently consuming the rest of your token budget. Caps lift automatically once the workflow advances past Phase 1, so Phase 4 citation chase is unaffected
 - **5 report archetypes** — `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background`, picked from user intent
 - **Mandatory self-critique** — Phase 6 runs a 14-point adversarial checklist; findings go in the report appendix
 - **Citation rigor** — every claim in the body carries a `[^id]` anchor; unanchored claims fail the gate
@@ -86,8 +88,8 @@ Works with all major AI coding agents that support the [Agent Skills](https://ag
 
 ```
 Phase 0  Scope        question decomposition + archetype + state init
-Phase 1  Discovery    multi-source search → dedupe → saturation check
-Phase 2  Triage       transparent ranking → top-N selection → tier triage (deep/skim/defer)
+Phase 1  Discovery    multi-source search → dedupe → 3-axis saturation check
+Phase 2  Triage       ranking → top-N selection → tier triage → optional PDF prefetch
 Phase 3  Deep read    parallel agent fan-out (deep tier) + abstract stub (skim tier)
 Phase 4  Chasing      citation graph (forward + backward)
 Phase 5  Synthesis    thematic clustering → tension map
@@ -303,10 +305,13 @@ The output lives at `reports/<slug>_<YYYYMMDD>.md` plus a `.bib` bibliography.
 [Phase 2] Ranking with literature-review weights...
           Top 20 selected. Score components written to state.
           Triage: 10 deep + 10 skim (--deep-ratio 0.5).
+          Prefetch: 8/10 deep-tier PDFs cached, 2 paywalled (no OA).
 
-[Phase 3] Deep tier: 10 parallel agents dispatched (1 wave).
-          9 returned full evidence, 1 evidence_unavailable (paywall, no OA).
-          Skim tier: 10 abstract-derived evidence stubs auto-filled.
+[Phase 3] Deep tier: 8 parallel agents dispatched (1 wave) — each reads
+          a local pdf_path, no per-agent download.
+          8 returned full evidence; 2 paywalled papers carry
+          evidence_unavailable from prefetch. Skim tier: 10
+          abstract-derived evidence stubs auto-filled.
 
 [Phase 4] Citation chasing on top 8 seeds, depth 1.
           Added 24 candidates, 6 re-scored into top 20.
@@ -333,6 +338,7 @@ scholar-deep-research/
 │   └── openai.yaml                # OpenAI Codex sidecar (interface, capabilities, prereqs)
 ├── scripts/
 │   ├── _common.py                 # Shared paper schema + emit helper
+│   ├── _pdf_fetch.py              # Shared PDF-fetch helper (paper-fetch + Unpaywall fallback)
 │   ├── research_state.py          # Central state file management
 │   ├── search_openalex.py         # OpenAlex (primary)
 │   ├── search_arxiv.py            # arXiv preprints
@@ -341,6 +347,7 @@ scholar-deep-research/
 │   ├── dedupe_papers.py           # Cross-source deduplication
 │   ├── rank_papers.py             # Transparent scoring
 │   ├── skim_papers.py             # Phase-3 tier triage (deep/skim/defer)
+│   ├── prefetch_pdfs.py           # Pull deep-tier PDFs ahead of agent fan-out (concurrent)
 │   ├── build_citation_graph.py    # Forward + backward snowball
 │   ├── extract_pdf.py             # PDF extraction with DOI resolution (paper-fetch / Unpaywall)
 │   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS

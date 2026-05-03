@@ -9,12 +9,14 @@
 - **端到端研究流程** — 从问题拆解（Phase 0）到带参考文献的成稿报告（Phase 7），中间强制执行 7 道阶段跃迁门控
 - **Agent-native CLI** — 每个响应都带 `request_id` / `latency_ms` / `cli_version` 的结构化 JSON 信封；每个会变更状态的命令都支持 `--idempotency-key`；提供 `--dry-run` 预览；破坏性操作（如 `init --force`）必须配合 `--dangerous` 确认；门控失败的错误信封会附带 `next: [命令]` 提示，让 agent 无需额外的发现轮次即可恢复
 - **Phase 3 并行精读** — top-N 论文经确定性 triage 切成 `deep` / `skim` / `defer` 三档。deep 档以每波 8–10 个 agent 的方式并发派发,各自在隔离上下文里读一篇 PDF、把结构化证据通过独占锁 CLI 写回 state;skim 档自动从摘要生成证据片段,不派 agent。可通过 `--deep-ratio` / `--skim-ratio` 调节,默认配置约削减 50% 的 Phase 3 成本而不损失覆盖
+- **派发前预取 PDF** — Phase 2 末尾可选 `prefetch_pdfs.py`,通过 [paper-fetch](https://github.com/Agents365-ai/paper-fetch)(及 Unpaywall 兜底)和 `ThreadPoolExecutor` 并发,把 deep 档的 PDF 全部拉到本地缓存。Phase 3 的 agent 直接读本地 `pdf_path`,不再各自下载;OA 链失败在派发**前**就以结构化 `pdf_status` 落到 state —— 不会出现"派完一波才发现一半付费墙"的浪费
 - **4 个联邦数据源** — OpenAlex（主源，免费、240M+ 论文）、arXiv（预印本）、Crossref（DOI 元数据）、PubMed（生物医学）
 - **透明排序公式** — 论文按公开公式打分（`α·相关性 + β·引用 + γ·时效 + δ·期刊先验`），各项分量写入 state
 - **跨源去重** — DOI 优先 + 标题相似度兜底，一篇论文仅一条记录
 - **引用网络追踪** — 通过 OpenAlex 进行正向 / 反向滚雪球
 - **持久化状态文件** — `research_state.json` 记录每次查询、每篇论文、每个决策、每个阶段。研究可断点续做、可审计
-- **饱和度作为停止信号** — 当一轮检索新增论文 <20% 且无新增论文引用 >100 时停止
+- **三轴饱和度停止信号** — 仅当**论文新增 <20%、作者新增 <25%、期刊新增 <30%** 三轴均低于阈值时,该数据源才计为饱和。能识破"查询不断检出同一实验室或同一期刊的不同论文,但探索其实已停滞"这种失败模式;不报期刊的源(如 arXiv)期刊轴自动以 vacuous truth 退出 AND
+- **Phase 1 预算上限** — 通过环境变量设硬上限(`SCHOLAR_PHASE1_MAX_ROUNDS` 默认 5、`SCHOLAR_PHASE1_MAX_REQUESTS_PER_SOURCE` 默认 20)防止 agent 失控循环。信任边界:agent 不能给自己抬天花板,失控的循环会撞上限并返回结构化的 `phase1_budget_exhausted` 错误,而不是把 token 预算悄悄吃光。一旦工作流推进出 Phase 1 上限自动解除,Phase 4 引用追踪不受影响
 - **5 种报告原型** — `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background`，按用户意图自动选择
 - **强制自我批判** — Phase 6 执行 14 项对抗性检查清单，发现写入报告附录
 - **引用严谨** — 正文每条非平凡论断必须带 `[^id]` 锚点，无锚点不通过门控
@@ -86,8 +88,8 @@
 
 ```
 Phase 0  Scope        问题拆解 + 原型选择 + 状态初始化
-Phase 1  Discovery    多源检索 → 去重 → 饱和度检查
-Phase 2  Triage       透明排序 → top-N 选择 → 分档 triage（deep / skim / defer）
+Phase 1  Discovery    多源检索 → 去重 → 三轴饱和度检查
+Phase 2  Triage       排序 → top-N 选择 → 分档 triage → 可选 PDF 预取
 Phase 3  Deep read    deep 档并行 agent 派发 + skim 档摘要证据片段
 Phase 4  Chasing      引用网络（正向 + 反向）
 Phase 5  Synthesis    主题聚类 → 张力图谱
@@ -302,10 +304,12 @@ pip install -r requirements.txt              # 仅当看到依赖变化提示时
 [Phase 2] 按文献综述权重排序...
           选出 top 20。各项分量已写入 state。
           Triage：10 deep + 10 skim（--deep-ratio 0.5）。
+          预取：deep 档 8/10 已缓存,2 篇付费墙(无 OA)。
 
-[Phase 3] Deep 档：派发 10 个并行 agent（1 波）。
-          9 个返回完整证据，1 个 evidence_unavailable（付费墙、无 OA 渠道）。
-          Skim 档：10 篇自动生成摘要级证据片段。
+[Phase 3] Deep 档：派发 8 个并行 agent（1 波）—— 各自读本地 pdf_path,
+          不再走网络下载。
+          8 个返回完整证据;2 篇付费墙论文已带 evidence_unavailable
+          (来自预取阶段)。Skim 档:10 篇自动生成摘要级证据片段。
 
 [Phase 4] 对 top 8 种子做 depth=1 引用追踪。
           新增 24 个候选，6 个进入 top 20。
@@ -331,6 +335,7 @@ scholar-deep-research/
 │   └── openai.yaml                # OpenAI Codex 侧车文件（接口、能力、前置条件）
 ├── scripts/
 │   ├── _common.py                 # 共享论文 schema 与输出 helper
+│   ├── _pdf_fetch.py              # 共享 PDF 抓取 helper（paper-fetch + Unpaywall 兜底）
 │   ├── research_state.py          # 状态文件管理（核心）
 │   ├── search_openalex.py         # OpenAlex（主源）
 │   ├── search_arxiv.py            # arXiv 预印本
@@ -339,6 +344,7 @@ scholar-deep-research/
 │   ├── dedupe_papers.py           # 跨源去重
 │   ├── rank_papers.py             # 透明打分
 │   ├── skim_papers.py             # Phase 3 分档 triage（deep / skim / defer）
+│   ├── prefetch_pdfs.py           # 派发前并发预取 deep 档 PDF
 │   ├── build_citation_graph.py    # 正向 + 反向滚雪球
 │   ├── extract_pdf.py             # PDF 提取 + DOI 解析（paper-fetch / Unpaywall）
 │   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
