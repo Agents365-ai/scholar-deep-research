@@ -132,7 +132,7 @@ def gate_2(state: dict[str, Any],
 
 
 def gate_3(state: dict[str, Any]) -> GateResult:
-    """2 → 3: Top-N selected with score components recorded."""
+    """2 → 3: Top-N selected, scored, and triaged into deep/skim/defer tiers."""
     selected = state.get("selected_ids") or []
     papers = state.get("papers") or {}
     with_components = [
@@ -158,20 +158,44 @@ def gate_3(state: dict[str, Any]) -> GateResult:
             detail=f"{len(with_components)} / {len(selected)} selected papers "
                    f"have score_components",
         ),
+        Check(
+            name="triage_applied",
+            ok=bool(state.get("triage_complete")),
+            detail=f"state.triage_complete = {state.get('triage_complete')!r}; "
+                   f"run skim_papers.py before advancing to Phase 3 so the "
+                   f"deep/skim/defer tiers are assigned and selected_ids "
+                   f"refined to the deep+skim slice.",
+        ),
     ]
     return GateResult(target=3, checks=checks)
 
 
 def gate_4(state: dict[str, Any]) -> GateResult:
-    """3 → 4: ≥80% of selected have depth='full' (rest explicitly 'shallow')."""
+    """3 → 4: every deep-tier paper has been deep-read (depth='full').
+
+    With triage (G3) the gate is tier-aware: skim-tier papers are
+    intentionally `depth='shallow'` (abstract-only evidence stub written by
+    `apply_triage`), so the legacy "≥80% of selected are full" rule no
+    longer carries semantic weight. The new bar is sharper: every paper
+    the agent committed to deep-read (`tier='deep'`) must have an
+    agent-written full evidence record (`depth='full'`). Skim-tier
+    incompleteness can never block this gate; only an unfinished agent
+    fan-out can.
+    """
     selected = state.get("selected_ids") or []
     papers = state.get("papers") or {}
-    depths = [
-        (papers.get(pid) or {}).get("depth") for pid in selected
-    ]
-    full_count = sum(1 for d in depths if d == "full")
+    depths = [(papers.get(pid) or {}).get("depth") for pid in selected]
     valid_depth = all(d in ("full", "shallow") for d in depths)
-    ratio = (full_count / len(selected)) if selected else 0.0
+
+    deep_ids = [pid for pid in selected
+                if (papers.get(pid) or {}).get("tier") == "deep"]
+    deep_full = [pid for pid in deep_ids
+                 if (papers.get(pid) or {}).get("depth") == "full"]
+    # Vacuous truth when deep tier is empty (e.g. user ran with
+    # --deep-ratio 0.0). The skill still ships, just with no agent-grade
+    # evidence — that is a deliberate user choice.
+    deep_complete = len(deep_full) == len(deep_ids)
+
     checks = [
         _phase_is(state, 3),
         Check(
@@ -181,10 +205,11 @@ def gate_4(state: dict[str, Any]) -> GateResult:
                    f"(bad: {[d for d in depths if d not in ('full','shallow')]})",
         ),
         Check(
-            name="deep_read_coverage",
-            ok=len(selected) > 0 and ratio >= 0.8,
-            detail=f"{full_count} / {len(selected)} selected depth=full "
-                   f"({ratio*100:.1f}% of required 80%)",
+            name="deep_tier_full_evidence",
+            ok=deep_complete,
+            detail=f"{len(deep_full)} / {len(deep_ids)} deep-tier papers "
+                   f"have depth='full' "
+                   f"(skim-tier excluded; depth='shallow' is by design)",
         ),
     ]
     return GateResult(target=4, checks=checks)
@@ -318,9 +343,14 @@ _NEXT_HINTS: dict[str, list[str]] = {
     "selected_have_score_components": [
         "python scripts/rank_papers.py --state {state}",
     ],
+    "triage_applied": [
+        "python scripts/skim_papers.py --state {state} "
+        "--deep-ratio 0.5 --skim-ratio 0.5",
+    ],
     # G4
-    "deep_read_coverage": [
-        "python scripts/extract_pdf.py --doi '<doi>' --state {state}",
+    "deep_tier_full_evidence": [
+        "# Dispatch parallel agents per references/agent_prompts/phase3_deep_read.md",
+        "python scripts/extract_pdf.py --doi '<doi>' --output paper.txt",
         "python scripts/research_state.py --state {state} evidence "
         "--id '<paper_id>' --method '...' --depth full",
     ],

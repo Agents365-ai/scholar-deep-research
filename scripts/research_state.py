@@ -468,6 +468,86 @@ def apply_dedupe(
     return {"after": len(new_papers), "ids_remapped": len(id_remap)}
 
 
+def apply_triage(
+    state_path: Path,
+    triage_records: dict[str, dict[str, Any]],
+    meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply Phase-3 triage results to state.
+
+    `triage_records` maps `paper_id -> {tier, triage_score, triage_components}`
+    where `tier ∈ {"deep", "skim", "defer"}`. The mutator:
+
+      - writes per-paper {tier, triage_score, triage_components}
+      - removes 'defer' papers from `state.selected_ids` (they stay in
+        `state.papers` for citation-chase reachability)
+      - auto-fills an abstract-derived evidence stub for 'skim' papers
+        with depth='shallow', so G4's `depth_marks_valid` check passes
+        without an agent fan-out
+      - leaves 'deep' papers untouched (depth still 'shallow' from ingest;
+        agents flip them to depth='full' via `evidence` after deep-read)
+      - sets `state.triage_complete = True` and stores the triage `meta`
+
+    Returns a summary dict with per-tier counts and the new selected_ids size.
+    """
+    summary: dict[str, Any] = {}
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        counts = {"deep": 0, "skim": 0, "defer": 0}
+        for pid, rec in triage_records.items():
+            paper = state["papers"].get(pid)
+            if not paper:
+                continue
+            tier = rec.get("tier")
+            if tier not in counts:
+                continue
+            paper["tier"] = tier
+            paper["triage_score"] = rec.get("triage_score")
+            paper["triage_components"] = rec.get("triage_components")
+            counts[tier] += 1
+
+            if tier == "skim":
+                # Auto-derived evidence from abstract; depth=shallow so
+                # G4's depth_marks_valid passes without agent fan-out.
+                # If the paper already has agent-written evidence (e.g.
+                # re-running triage after a manual deep-read), preserve it.
+                if not paper.get("evidence"):
+                    abstract = paper.get("abstract") or ""
+                    paper["evidence"] = {
+                        "method": "abstract-only triage (skim tier)",
+                        "findings": [abstract[:500]] if abstract else [],
+                        "limitations": "Skim tier — evidence derived from "
+                                       "abstract only; not a deep read.",
+                        "relevance": "Auto-filled by skim_papers.py; agent "
+                                     "did not deep-read.",
+                    }
+                paper["depth"] = "shallow"
+
+        # Refine selected_ids: drop defer tier.
+        kept: list[str] = []
+        for pid in state.get("selected_ids") or []:
+            paper = state["papers"].get(pid)
+            if paper and paper.get("tier") == "defer":
+                paper["selected"] = False
+                continue
+            kept.append(pid)
+        state["selected_ids"] = kept
+
+        state["triage_complete"] = True
+        state["triage_meta"] = meta
+        summary.update({
+            "counts": counts,
+            "selected_ids_after": len(kept),
+            "deferred_removed": (
+                len(triage_records) - counts["deep"] - counts["skim"]
+            ),
+        })
+        return state
+
+    _locked_rmw(state_path, mutator)
+    return summary
+
+
 def apply_citation_chase(
     state_path: Path,
     new_records: list[dict[str, Any]],
@@ -959,6 +1039,37 @@ def cmd_citation_chase(args: argparse.Namespace) -> None:
     with_idempotency(args, compute)
 
 
+def cmd_triage(args: argparse.Namespace) -> None:
+    """Apply a triage patch produced by skim_papers.py.
+
+    Patch shape: {"triage_records": {pid: {tier, triage_score, triage_components}},
+                  "meta": {...}}.
+    Normal usage is via skim_papers.py, which calls apply_triage() directly.
+    This subcommand is for replay/audit when a patch has been saved.
+    """
+    reject_dry_run_with_idempotency(args)
+    patch = json.loads(Path(args.patch).read_text())
+    if args.dry_run:
+        recs = patch.get("triage_records") or {}
+        ok({
+            "dry_run": True,
+            "would_apply": {
+                "triage_records": len(recs),
+                "meta": patch.get("meta") or {},
+            },
+        })
+        return
+
+    def compute() -> dict[str, Any]:
+        return apply_triage(
+            Path(args.state),
+            patch.get("triage_records") or {},
+            patch.get("meta") or {},
+        )
+
+    with_idempotency(args, compute)
+
+
 def cmd_critique(args: argparse.Namespace) -> None:
     final_crit: dict[str, Any] = {}
 
@@ -1106,6 +1217,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Retry-safe key (see ingest --idempotency-key).")
     set_command_meta(s, since="0.4.0", tier="write")
     s.set_defaults(func=cmd_citation_chase)
+
+    s = sub.add_parser("triage", help="Apply a Phase-3 triage patch JSON")
+    s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Report patch size without mutating state.")
+    s.add_argument("--idempotency-key",
+                   help="Retry-safe key (see ingest --idempotency-key).")
+    set_command_meta(s, since="0.7.0", tier="write")
+    s.set_defaults(func=cmd_triage)
 
     s = sub.add_parser("theme", help="Add a theme")
     s.add_argument("--name", required=True)

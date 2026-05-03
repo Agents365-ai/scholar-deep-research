@@ -74,17 +74,81 @@ class GatesTest(unittest.TestCase):
                 phase=3,
                 selected_ids=["p1", "p2", "p3", "p4", "p5"],
                 papers={
-                    "p1": {"id": "p1", "depth": "full"},
-                    "p2": {"id": "p2", "depth": "full"},
-                    "p3": {"id": "p3", "depth": "full"},
-                    "p4": {"id": "p4", "depth": "full"},
-                    "p5": {"id": "p5", "depth": "shallow"},
+                    "p1": {"id": "p1", "depth": "full", "tier": "deep"},
+                    "p2": {"id": "p2", "depth": "full", "tier": "deep"},
+                    "p3": {"id": "p3", "depth": "full", "tier": "deep"},
+                    "p4": {"id": "p4", "depth": "full", "tier": "deep"},
+                    "p5": {"id": "p5", "depth": "shallow", "tier": "skim"},
                 },
             )
             env = run_script("research_state.py", [
                 "--state", str(state), "advance", "--to", "4", "--check-only",
             ])
             self.assertTrue(env["data"]["met"])
+
+    def test_g3_fails_without_triage(self) -> None:
+        """A fully-ranked + selected state must still trip G3 if triage hasn't run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            self._write_state(
+                state,
+                phase=2,
+                selected_ids=["p1", "p2"],
+                ranking={"formula": "..."},
+                papers={
+                    "p1": {"id": "p1", "score_components": {"relevance": 0.5}},
+                    "p2": {"id": "p2", "score_components": {"relevance": 0.6}},
+                },
+            )
+            env = run_script("research_state.py", [
+                "--state", str(state), "advance", "--to", "3", "--check-only",
+            ], expect_rc=3)
+            failing = [c["name"] for c in env["error"]["gate"]["checks"] if not c["ok"]]
+            self.assertIn("triage_applied", failing)
+
+    def test_g3_pass_with_triage(self) -> None:
+        """With triage_complete=true plus the rank/select prerequisites, G3 passes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            self._write_state(
+                state,
+                phase=2,
+                selected_ids=["p1", "p2"],
+                ranking={"formula": "..."},
+                triage_complete=True,
+                papers={
+                    "p1": {"id": "p1", "score_components": {"relevance": 0.5},
+                           "tier": "deep"},
+                    "p2": {"id": "p2", "score_components": {"relevance": 0.6},
+                           "tier": "skim"},
+                },
+            )
+            env = run_script("research_state.py", [
+                "--state", str(state), "advance", "--to", "3", "--check-only",
+            ])
+            self.assertTrue(env["data"]["met"])
+
+    def test_g4_fails_when_deep_tier_unfinished(self) -> None:
+        """Deep tier paper still depth=shallow blocks G4 (skim tier does not)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            self._write_state(
+                state,
+                phase=3,
+                selected_ids=["p1", "p2"],
+                papers={
+                    # p1 deep but unfinished — agent never wrote evidence.
+                    "p1": {"id": "p1", "depth": "shallow", "tier": "deep"},
+                    # p2 skim — depth=shallow is by design, must not block.
+                    "p2": {"id": "p2", "depth": "shallow", "tier": "skim"},
+                },
+            )
+            env = run_script("research_state.py", [
+                "--state", str(state), "advance", "--to", "4", "--check-only",
+            ], expect_rc=3)
+            failing = [c["name"] for c in env["error"]["gate"]["checks"] if not c["ok"]]
+            self.assertIn("deep_tier_full_evidence", failing)
+            self.assertNotIn("depth_marks_valid", failing)
 
     def test_g6_fail_without_themes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

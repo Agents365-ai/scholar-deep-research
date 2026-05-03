@@ -5,7 +5,7 @@ license: MIT
 homepage: https://github.com/Agents365-ai/scholar-deep-research
 compatibility: Requires Python 3.9+ with httpx and pypdf (see requirements.txt). Works offline-first (no MCP required) but enriches with Semantic Scholar / Brave MCP tools when available.
 platforms: [macos, linux, windows]
-metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.6.1"}
+metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.7.0"}
 ---
 
 # Scholar Deep Research
@@ -149,25 +149,41 @@ Write the top-N selection to state:
 python scripts/research_state.py select --state research_state.json --top 20
 ```
 
-### Phase 3 — Deep read
+**Triage the selection into deep / skim / defer tiers** before advancing. Phase 3 fan-out is the most expensive stage of the workflow; not every selected paper deserves a full agent dispatch:
 
-For each paper in the top-N: get the best available full text, extract evidence, attach to state.
+```bash
+python scripts/skim_papers.py --state research_state.json \
+  --deep-ratio 0.5 --skim-ratio 0.5
+```
 
-1. **Preferred order for full text:** resolve by DOI (automatic OA chain) → publisher PDF URL from OpenAlex → arXiv PDF → institutional repository → preprint server → abstract only (with a warning attached to the paper record).
-2. **Extract text** — use `--doi` when the paper's DOI is known (resolves and extracts in one step), or `--input`/`--url` for direct paths:
-   ```bash
-   python scripts/extract_pdf.py --doi 10.1038/s41586-020-2649-2 --output paper.txt
-   python scripts/extract_pdf.py --input paper.pdf --output paper.txt
-   ```
-   DOI mode uses the [paper-fetch](https://github.com/Agents365-ai/paper-fetch) skill (5-source OA chain) if installed, otherwise falls back to Unpaywall. The output envelope includes `fetch_meta` with title, authors, year, and source when using `--doi`.
-3. **Fill the per-paper evidence slot** in state (the agent does this; no script). For each paper capture:
-   - `question_or_hypothesis`
-   - `method` (one sentence)
-   - `key_findings` (3-5 bullets, each with a page/section anchor)
-   - `limitations`
-   - `relevance_to_question` (how this paper moves the answer)
+Defaults split the top-N evenly: top half → `deep` (agent dispatch in Phase 3), bottom half → `skim` (abstract-derived evidence stub auto-filled, `depth=shallow`). For tighter budgets, use `--deep-ratio 0.3 --skim-ratio 0.5` — the remaining 20% gets `tier=defer` and is removed from `selected_ids` (still queryable as candidates for citation chase).
 
-**Abstract-only papers are marked** `depth: shallow` in state — they can appear in the report but should not be the *only* source for any claim.
+The script emits `data.deep_tier_preview` listing the deep-tier papers by triage_score. **Show this to the user before advancing** so they can hand-override before agents fan out (re-run with different ratios, or manually re-rank in state). Triage is required before G3 passes — the gate's `triage_applied` check rejects the advance otherwise.
+
+### Phase 3 — Deep read (parallel agent fan-out)
+
+Phase 3 splits by tier:
+
+- **`tier=skim`** — `apply_triage()` already wrote an abstract-derived evidence stub with `depth=shallow`. No further action needed.
+- **`tier=deep`** — dispatch one agent per paper, in parallel waves of 8–10. Each agent reads the PDF, writes structured evidence back to state, and returns one JSON line. The host's main context never sees the full PDF text.
+
+The agent prompt template lives at `references/agent_prompts/phase3_deep_read.md`. Load it once, instantiate per paper, and dispatch all N tool_use calls in a **single message** so they fan out concurrently. Per-agent contract:
+
+- **Input:** `paper_id`, `doi`, `pdf_url`, `abstract`, `question`, `state_path`
+- **Action:** `extract_pdf.py --doi <doi> --output <tmp>` → read text → write `evidence add --depth full`
+- **Output:** one line `{"paper_id": "...", "status": "ok"|"evidence_unavailable", ...}`
+
+The state CLI is exclusive-locked, so N agents writing concurrent `evidence add` calls are serialized automatically — no coordination needed.
+
+```bash
+# After all wave(s) complete, verify deep-tier coverage:
+python scripts/research_state.py advance --state research_state.json \
+  --to 4 --check-only
+```
+
+If `deep_tier_full_evidence` is failing, dispatch a follow-up wave for the missing ids only. If a paper's full text is genuinely unreachable (paywall, exhausted OA chain), the agent should write a `depth=shallow` record with `method` starting `evidence_unavailable:` per the prompt's failure-mode section — that record satisfies `depth_marks_valid` without inflating the deep-tier coverage count.
+
+**Manual fallback (no agents available).** Hosts that cannot dispatch parallel agents (some non-CC platforms) can run Phase 3 sequentially in the main session: for each `tier=deep` paper, `extract_pdf.py --doi <doi>` then `research_state.py evidence --id <pid> --depth full ...`. Slower and burns more context, but the gate logic is identical.
 
 ### Phase 4 — Citation chasing
 
@@ -255,6 +271,7 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 | `search_exa.py` | Exa neural web search (optional, key-gated) — open-web coverage the scholarly APIs miss. |
 | `dedupe_papers.py` | DOI normalization + title similarity merging across sources. |
 | `rank_papers.py` | Transparent scoring formula. Prints the formula and per-paper components. |
+| `skim_papers.py` | Phase-3 triage. Splits selected papers into `deep` / `skim` / `defer` tiers on cheap deterministic signals, refines `selected_ids`, auto-fills evidence stubs for skim tier. Runs at the close of Phase 2 before G3. |
 | `build_citation_graph.py` | Forward/backward snowballing via OpenAlex. |
 | `extract_pdf.py` | Full-text extraction (pypdf). Accepts `--input`, `--url`, or `--doi`. DOI mode resolves via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) skill if installed, falls back to Unpaywall. Safe on scanned PDFs (skips, emits warning). |
 | `export_bibtex.py` | BibTeX / CSL-JSON / RIS export from state. |
@@ -345,10 +362,15 @@ Agents should never set these themselves. They belong in the shell profile, a sy
       "score_components": {"relevance": 0.9, "citations": 0.8, "recency": 0.6, "venue": 1.0},
       "selected": true,
       "depth": "full",
+      "tier": "deep",
+      "triage_score": 0.74,
+      "triage_components": {"relevance": 0.8, "citation_density": 0.6, "recency": 0.9, "has_pdf": 1.0, "abstract_quality": 1.0},
       "evidence": {"method": "...", "findings": ["..."], "limitations": "..."},
       "discovered_via": "search"
     }
   },
+  "triage_complete": true,
+  "triage_meta": {"weights": {...}, "deep_ratio": 0.5, "skim_ratio": 0.5, "triaged_at": "..."},
   "themes": [{"name": "...", "paper_ids": ["..."]}],
   "tensions": [{"topic": "...", "sides": [{"position": "...", "paper_ids": ["..."]}]}],
   "self_critique": {"findings": [], "resolved": [], "appendix": "..."},
@@ -373,8 +395,8 @@ The gate predicates are enforced in `scripts/_gates.py`. Direct `set --field pha
 |--------|-----------------|
 | G1 (→ 1) | Question set, archetype valid, state initialized. *`≥3 keyword clusters` is host-checked.* |
 | G2 (→ 2) | `overall_saturated == true` across all queried sources AND ≥3 distinct sources in `state.queries`. |
-| G3 (→ 3) | `state.ranking` recorded; `selected_ids` non-empty; every selected paper has `score_components`. |
-| G4 (→ 4) | All selected papers have `depth ∈ {full, shallow}` AND ≥80% are `depth=full`. |
+| G3 (→ 3) | `state.ranking` recorded; `selected_ids` non-empty; every selected paper has `score_components`; `state.triage_complete=true` (run `skim_papers.py`). |
+| G4 (→ 4) | All selected papers have `depth ∈ {full, shallow}` AND **every `tier=deep` paper has `depth=full`** (skim-tier `depth=shallow` is by design and does not block). |
 | G5 (→ 5) | ≥1 query with `source=openalex_citation_chase` and `hits > 0`. |
 | G6 (→ 6) | `len(themes) ≥ 3` AND (`len(tensions) ≥ 1` OR a critique finding mentioning "no tensions"). |
 | G7 (→ 7) | `state.self_critique.appendix` non-empty; `len(resolved) ≥ len(findings)`. |
@@ -453,3 +475,4 @@ Modular documentation, loaded only when needed:
 - `references/quality_assessment.md` — CRAAP, journal tier, retraction check, preprint handling
 - `references/report_templates.md` — the 5 archetypes with section-by-section guidance
 - `references/pitfalls.md` — long-form version of the pitfalls list with examples
+- `references/agent_prompts/phase3_deep_read.md` — per-paper prompt for parallel agent fan-out in Phase 3
