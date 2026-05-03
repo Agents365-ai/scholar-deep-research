@@ -21,7 +21,7 @@ from _common import (
     maybe_emit_schema, set_command_meta,
 )
 
-API = "http://export.arxiv.org/api/query"
+API = "https://export.arxiv.org/api/query"
 NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",

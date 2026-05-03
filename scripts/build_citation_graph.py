@@ -84,7 +84,7 @@ def fetch_referenced(seed_id: str, oa_ids: list[str],
         params: dict[str, Any] = {
             "filter": "openalex_id:" + "|".join(batch),
             "per-page": chunk,
-            "select": "id,doi,title,authorships,publication_year,host_venue,"
+            "select": "id,doi,title,authorships,publication_year,"
                       "primary_location,cited_by_count,abstract_inverted_index",
         }
         if email:
@@ -105,7 +105,7 @@ def fetch_cited_by(oa_id: str, limit: int, email: str | None) -> list[dict]:
     params: dict[str, Any] = {
         "filter": f"cites:{oa_id}",
         "per-page": min(limit, 200),
-        "select": "id,doi,title,authorships,publication_year,host_venue,"
+        "select": "id,doi,title,authorships,publication_year,"
                   "primary_location,cited_by_count,abstract_inverted_index",
     }
     if email:
