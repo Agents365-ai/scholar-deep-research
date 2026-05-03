@@ -23,6 +23,9 @@ paper_id   : ${paper_id}        # e.g. "doi:10.1038/s41586-020-2649-2"
 title      : ${title}
 doi        : ${doi}             # may be null — fall back to pdf_url
 pdf_url    : ${pdf_url}         # may be null
+pdf_path   : ${pdf_path}        # may be null. If set AND file exists, use it
+                                # directly — prefetch_pdfs.py already pulled
+                                # the PDF, no network call needed.
 abstract   : ${abstract}        # already in state; use as a fallback if PDF fetch fails
 
 ## Research question (Phase 0)
@@ -32,10 +35,20 @@ ${question}
 ## What you must do
 
 1. Get the full text. Try in this order, stopping at the first that yields >2000 chars:
-   a. `python scripts/extract_pdf.py --doi '${doi}' --output /tmp/${safe_id}.txt`
+   a. **If `pdf_path` is provided AND points at an existing file** (`prefetch_pdfs.py` ran):
+      ```
+      python scripts/extract_pdf.py --input '${pdf_path}' --output /tmp/${safe_id}.txt
+      ```
+      No network call — fastest path. **Always prefer this when available.**
+   b. `python scripts/extract_pdf.py --doi '${doi}' --output /tmp/${safe_id}.txt`
       (uses the paper-fetch skill's 5-source OA chain when installed)
-   b. `python scripts/extract_pdf.py --url '${pdf_url}' --output /tmp/${safe_id}.txt`
-   c. If both fail: write evidence_unavailable (see "Failure mode" below) and stop.
+   c. `python scripts/extract_pdf.py --url '${pdf_url}' --output /tmp/${safe_id}.txt`
+   d. If all fail: write evidence_unavailable (see "Failure mode" below) and stop.
+
+   If `pdf_path` is set but the file is missing (cache wiped between prefetch
+   and dispatch), fall through to (b). Do **not** silently skip — that path
+   is what `pdf_status='failed'` already records, and re-attempting via (b)
+   gives the paper one more chance with a different transport.
 
 2. Read the extracted text. Extract per-paper evidence covering:
    - method            : 1 sentence on the experimental/computational approach
