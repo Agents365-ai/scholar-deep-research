@@ -53,6 +53,7 @@ from typing import Any, Callable
 
 from _common import (
     EXIT_STATE, EXIT_VALIDATION, err, maybe_emit_schema, ok,
+    phase1_max_requests_per_source, phase1_max_rounds,
     reject_dry_run_with_idempotency, set_command_meta, with_idempotency,
 )
 from _locking import StateLockTimeout, locked_rmw
@@ -320,7 +321,66 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     # path is the identity; if the file contents change under a retried key,
     # that is the caller's choice and the result is what it is. This matches
     # what gh / kubectl do with input files under --idempotency-key.
-    with_idempotency(args, compute)
+    try:
+        with_idempotency(args, compute)
+    except Phase1BudgetExhausted as exc:
+        err("phase1_budget_exhausted", str(exc),
+            retryable=False, exit_code=EXIT_VALIDATION,
+            limit_kind=exc.limit_kind, limit=exc.limit, current=exc.current,
+            source=exc.source)
+
+
+class Phase1BudgetExhausted(Exception):
+    """Raised when an ingest would push Phase 1 past its configured cap.
+
+    Two cap kinds:
+      - `max_requests_per_source`: too many ingest events for one source.
+      - `max_rounds`: would create a brand-new round above the cap.
+
+    Caps lift automatically once `state["phase"] >= 2`, so Phase 4
+    citation chase is not affected. Override defaults via
+    SCHOLAR_PHASE1_MAX_REQUESTS_PER_SOURCE / SCHOLAR_PHASE1_MAX_ROUNDS
+    env vars (human/orchestrator boundary; agents cannot raise their
+    own ceiling).
+    """
+
+    def __init__(self, limit_kind: str, limit: int, current: int,
+                 source: str | None = None):
+        super().__init__(
+            f"phase1 budget exhausted: {limit_kind} = {current} (max {limit})"
+            + (f" on source '{source}'" if source else "")
+        )
+        self.limit_kind = limit_kind
+        self.limit = limit
+        self.current = current
+        self.source = source
+
+
+def _check_phase1_budget(state: dict[str, Any], source: str,
+                         new_round: int) -> None:
+    """Raise Phase1BudgetExhausted when the next ingest would exceed caps.
+
+    No-op when state has already advanced past Phase 1.
+    """
+    if (state.get("phase") or 0) >= 2:
+        return
+
+    queries = state.get("queries") or []
+
+    src_requests = sum(1 for q in queries if q.get("source") == source)
+    cap_per_source = phase1_max_requests_per_source()
+    if src_requests >= cap_per_source:
+        raise Phase1BudgetExhausted(
+            "max_requests_per_source", cap_per_source, src_requests,
+            source=source,
+        )
+
+    existing_rounds = {q.get("round") for q in queries}
+    cap_rounds = phase1_max_rounds()
+    if new_round not in existing_rounds and len(existing_rounds) >= cap_rounds:
+        raise Phase1BudgetExhausted(
+            "max_rounds", cap_rounds, len(existing_rounds),
+        )
 
 
 def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -332,6 +392,11 @@ def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     concurrent Phase 1 searches are safe.
 
     Returns the ingestion summary dict (to be emitted by the caller).
+
+    Raises `Phase1BudgetExhausted` when the per-source or new-round cap
+    would be exceeded; the lock is released without writing (the mutator
+    raises before any state mutation). Callers convert to an `err()`
+    envelope.
     """
     _validate_ingest_payload(payload)
     source = payload["source"]
@@ -342,6 +407,7 @@ def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
 
     def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        _check_phase1_budget(state, source, rnd)
         new_count = 0
         merged_count = 0
         for p in incoming:
@@ -700,6 +766,8 @@ def compute_saturation(
     threshold: float = 20.0,
     max_citations: int = 100,
     min_rounds: int = 2,
+    threshold_authors: float = 25.0,
+    threshold_venues: float = 30.0,
     source: str | None = None,
 ) -> dict[str, Any]:
     """Pure function: compute saturation per-source and overall.
@@ -708,6 +776,15 @@ def compute_saturation(
     Raises `SaturationInputError` for `no_queries` / `source_not_queried`
     instead of calling `err()`, so callers control the envelope (cmd_
     wraps it; gate_2 catches and treats as not-saturated).
+
+    Three independent novelty axes — papers, authors, venues — must each
+    fall under their threshold for a source to count as saturated. The
+    paper axis catches "no new hits"; the author/venue axes catch the
+    case where a query keeps surfacing different papers from the same
+    hub of researchers or the same venue (i.e. broader exploration has
+    stalled even though the paper count keeps ticking). When a source
+    never reports venues (e.g. arXiv abstracts), that axis evaluates to
+    None and is excluded from the AND.
     """
     if not state["queries"]:
         raise SaturationInputError(
@@ -732,27 +809,68 @@ def compute_saturation(
     per_source: dict[str, dict[str, Any]] = {}
     for src, queries in by_source.items():
         last = queries[-1]
+        last_round = last["round"]
         rounds_run = len(queries)
         hits = last.get("hits", 0) or 0
         new = last.get("new", 0) or 0
         pct_new = (new / hits * 100) if hits else 0.0
         max_cit = 0
+        # Single pass: collect prior vs last-round authors/venues for this
+        # source. Papers carry first_seen_round; we partition on that.
+        prior_authors: set[str] = set()
+        last_authors: set[str] = set()
+        prior_venues: set[str] = set()
+        last_venues: set[str] = set()
         for p in state["papers"].values():
-            if (p.get("first_seen_round") == last["round"]
-                    and src in (p.get("source") or [])):
+            if src not in (p.get("source") or []):
+                continue
+            seen_round = p.get("first_seen_round")
+            authors = [a for a in (p.get("authors") or []) if a]
+            venue = p.get("venue") or None
+            if seen_round == last_round:
+                last_authors.update(authors)
+                if venue:
+                    last_venues.add(venue)
                 max_cit = max(max_cit, p.get("citations") or 0)
+            elif isinstance(seen_round, int) and seen_round < last_round:
+                prior_authors.update(authors)
+                if venue:
+                    prior_venues.add(venue)
+
+        all_authors = prior_authors | last_authors
+        new_authors_pct: float | None
+        if all_authors:
+            new_authors_pct = round(
+                len(last_authors - prior_authors) / len(all_authors) * 100, 1
+            )
+        else:
+            new_authors_pct = None
+
+        all_venues = prior_venues | last_venues
+        new_venues_pct: float | None
+        if all_venues:
+            new_venues_pct = round(
+                len(last_venues - prior_venues) / len(all_venues) * 100, 1
+            )
+        else:
+            new_venues_pct = None
+
         saturated = (
             rounds_run >= min_rounds
             and pct_new < threshold
             and max_cit < max_citations
+            and (new_authors_pct is None or new_authors_pct < threshold_authors)
+            and (new_venues_pct is None or new_venues_pct < threshold_venues)
         )
         per_source[src] = {
             "rounds_run": rounds_run,
-            "last_round": last["round"],
+            "last_round": last_round,
             "last_query": last.get("query", ""),
             "hits_last_round": hits,
             "new_last_round": new,
             "new_pct": round(pct_new, 1),
+            "new_authors_pct": new_authors_pct,
+            "new_venues_pct": new_venues_pct,
             "max_new_citations": max_cit,
             "saturated": saturated,
         }
@@ -764,6 +882,8 @@ def compute_saturation(
         "per_source": per_source,
         "overall_saturated": overall_saturated,
         "threshold_pct": threshold,
+        "threshold_authors_pct": threshold_authors,
+        "threshold_venues_pct": threshold_venues,
         "max_citations_threshold": max_citations,
         "min_rounds": min_rounds,
     }
@@ -777,10 +897,19 @@ def cmd_saturation(args: argparse.Namespace) -> None:
       - its last round's `new` count is < `--threshold`% of its last round's
         `hits`, AND
       - no paper first seen in that last round (and linked to this source)
-        has more than `--max-citations` citations.
+        has more than `--max-citations` citations, AND
+      - the share of brand-new authors in the last round is
+        < `--threshold-authors-pct` (default 25), AND
+      - the share of brand-new venues in the last round is
+        < `--threshold-venues-pct` (default 30).
+
+    The author/venue axes catch "we keep finding papers from the same hub"
+    — a case the paper-pct rule alone cannot. A source that never reports
+    a given axis (e.g. arXiv with no venue) reports null for that axis
+    and the AND-clause skips it.
 
     `overall_saturated` is True only when every queried source individually
-    satisfies the rule — the gate that P1 #10 from the review targets.
+    satisfies the rule.
     """
     state = load_state(Path(args.state))
     try:
@@ -789,6 +918,8 @@ def cmd_saturation(args: argparse.Namespace) -> None:
             threshold=args.threshold,
             max_citations=args.max_citations,
             min_rounds=args.min_rounds,
+            threshold_authors=args.threshold_authors_pct,
+            threshold_venues=args.threshold_venues_pct,
             source=args.source,
         )
     except SaturationInputError as exc:
@@ -1223,6 +1354,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Minimum rounds before a source can be called "
                         "saturated. Prevents declaring saturation on a "
                         "single-query source (default 2).")
+    s.add_argument("--threshold-authors-pct", type=float, default=25.0,
+                   help="Brand-new-author share below which the author "
+                        "axis is considered saturated (default 25). "
+                        "Looser than --threshold because authors recur "
+                        "more naturally than papers.")
+    s.add_argument("--threshold-venues-pct", type=float, default=30.0,
+                   help="Brand-new-venue share below which the venue "
+                        "axis is considered saturated (default 30). "
+                        "Sources without venue metadata report null and "
+                        "skip this axis.")
     s.add_argument("--source",
                    help="Check a single source only (default: all sources)")
     s.set_defaults(func=cmd_saturation)
