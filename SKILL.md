@@ -5,7 +5,7 @@ license: MIT
 homepage: https://github.com/Agents365-ai/scholar-deep-research
 compatibility: Requires Python 3.9+ with httpx and pypdf (see requirements.txt). Works offline-first (no MCP required) but enriches with Semantic Scholar / Brave MCP tools when available.
 platforms: [macos, linux, windows]
-metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.7.0"}
+metadata: {"openclaw":{"requires":{"bins":["python3"]},"emoji":"🔬"},"hermes":{"tags":["research","literature-review","academic","papers","citations","survey"],"category":"research"},"pimo":{"tags":["research","literature-review","academic"],"category":"research"},"author":"Agents365-ai","version":"0.8.0"}
 ---
 
 # Scholar Deep Research
@@ -160,6 +160,19 @@ Defaults split the top-N evenly: top half → `deep` (agent dispatch in Phase 3)
 
 The script emits `data.deep_tier_preview` listing the deep-tier papers by triage_score. **Show this to the user before advancing** so they can hand-override before agents fan out (re-run with different ratios, or manually re-rank in state). Triage is required before G3 passes — the gate's `triage_applied` check rejects the advance otherwise.
 
+**Optional but recommended — prefetch deep-tier PDFs** before agent fan-out:
+
+```bash
+python scripts/prefetch_pdfs.py --state research_state.json \
+  --tier deep --concurrency 4
+```
+
+Fetches every deep-tier paper's PDF into `${SCHOLAR_CACHE_DIR:-.scholar_cache}/pdfs/<id-hash>/` via `paper-fetch` (with Unpaywall fallback), in parallel waves, and writes `pdf_path` / `pdf_status` / `pdf_source` / `pdf_bytes` per paper. Phase 3 agents then **read the local file directly** instead of each running its own download — Agent context stays focused on reading + reasoning, not on retrying paywalls.
+
+Failures land as `pdf_status='failed'` with a `pdf_failure_code` (`paper_fetch_error`, `no_open_access_pdf`, `pdf_download_failed`, …); papers without a DOI get `pdf_status='no_doi'`. Phase 3 agents check `pdf_path` first and only fall back to `extract_pdf.py --doi` if the prefetched path is missing. Re-running prefetch is cheap: papers with an existing `pdf_path` on disk are skipped (`pdf_status='cached'`).
+
+Skip prefetch entirely when paper-fetch is not installed AND you don't want Unpaywall traffic — Phase 3 agents will then download per-paper inside their own contexts (slower, noisier, but functionally identical).
+
 ### Phase 3 — Deep read (parallel agent fan-out)
 
 Phase 3 splits by tier:
@@ -272,6 +285,7 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 | `dedupe_papers.py` | DOI normalization + title similarity merging across sources. |
 | `rank_papers.py` | Transparent scoring formula. Prints the formula and per-paper components. |
 | `skim_papers.py` | Phase-3 triage. Splits selected papers into `deep` / `skim` / `defer` tiers on cheap deterministic signals, refines `selected_ids`, auto-fills evidence stubs for skim tier. Runs at the close of Phase 2 before G3. |
+| `prefetch_pdfs.py` | Optional. Pulls deep-tier PDFs into a stable cache via paper-fetch (with Unpaywall fallback) before Phase 3 agent fan-out. Concurrent (`--concurrency`), idempotent on re-run, fail-soft per paper. Writes `pdf_path` / `pdf_status` per paper so agents read a local file instead of re-downloading. |
 | `build_citation_graph.py` | Forward/backward snowballing via OpenAlex. |
 | `extract_pdf.py` | Full-text extraction (pypdf). Accepts `--input`, `--url`, or `--doi`. DOI mode resolves via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) skill if installed, falls back to Unpaywall. Safe on scanned PDFs (skips, emits warning). |
 | `export_bibtex.py` | BibTeX / CSL-JSON / RIS export from state. |

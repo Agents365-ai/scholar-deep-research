@@ -548,6 +548,54 @@ def apply_triage(
     return summary
 
 
+def apply_pdf_paths(
+    state_path: Path,
+    pdf_records: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply prefetch_pdfs.py results to state.
+
+    `pdf_records` maps `paper_id -> { pdf_status, pdf_path?, pdf_source?,
+    pdf_bytes?, pdf_url?, pdf_fetched_at?, pdf_failure_code?,
+    pdf_failure_reason?, pdf_failure_retryable? }`. The mutator copies
+    these onto `state.papers[<id>]` for each known paper and skips
+    silently for unknown ids (a paper deleted between prefetch dispatch
+    and write-back is not an error).
+
+    Returns a summary with per-status counts and the count of unknown
+    ids that were skipped.
+    """
+    # Stable allow-list so an attacker-shaped record cannot smuggle
+    # unrelated keys onto a paper through this entry point.
+    _ALLOWED_KEYS = {
+        "pdf_status", "pdf_path", "pdf_source", "pdf_bytes", "pdf_url",
+        "pdf_fetched_at", "pdf_failure_code", "pdf_failure_reason",
+        "pdf_failure_retryable",
+    }
+    summary: dict[str, Any] = {"applied": 0, "unknown": 0, "by_status": {}}
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        for pid, rec in pdf_records.items():
+            paper = state["papers"].get(pid)
+            if not paper:
+                summary["unknown"] += 1
+                continue
+            for k, v in rec.items():
+                if k == "id":
+                    continue
+                if k not in _ALLOWED_KEYS:
+                    continue
+                paper[k] = v
+            summary["applied"] += 1
+            status = rec.get("pdf_status") or "unknown"
+            summary["by_status"][status] = (
+                summary["by_status"].get(status, 0) + 1
+            )
+        return state
+
+    _locked_rmw(state_path, mutator)
+    return summary
+
+
 def apply_citation_chase(
     state_path: Path,
     new_records: list[dict[str, Any]],
@@ -1070,6 +1118,33 @@ def cmd_triage(args: argparse.Namespace) -> None:
     with_idempotency(args, compute)
 
 
+def cmd_prefetch(args: argparse.Namespace) -> None:
+    """Apply a prefetch_pdfs patch produced by prefetch_pdfs.py.
+
+    Patch shape: {"pdf_records": {pid: {pdf_status, pdf_path?, ...}}}.
+    Normal usage is via prefetch_pdfs.py, which calls apply_pdf_paths()
+    directly. This subcommand exists for replay/audit when a patch has
+    been saved out-of-band.
+    """
+    reject_dry_run_with_idempotency(args)
+    patch = json.loads(Path(args.patch).read_text())
+    if args.dry_run:
+        recs = patch.get("pdf_records") or {}
+        ok({
+            "dry_run": True,
+            "would_apply": {"pdf_records": len(recs)},
+        })
+        return
+
+    def compute() -> dict[str, Any]:
+        return apply_pdf_paths(
+            Path(args.state),
+            patch.get("pdf_records") or {},
+        )
+
+    with_idempotency(args, compute)
+
+
 def cmd_critique(args: argparse.Namespace) -> None:
     final_crit: dict[str, Any] = {}
 
@@ -1226,6 +1301,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Retry-safe key (see ingest --idempotency-key).")
     set_command_meta(s, since="0.7.0", tier="write")
     s.set_defaults(func=cmd_triage)
+
+    s = sub.add_parser("prefetch", help="Apply a PDF-prefetch patch JSON")
+    s.add_argument("--patch", required=True, help="Patch JSON file path")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Report patch size without mutating state.")
+    s.add_argument("--idempotency-key",
+                   help="Retry-safe key (see ingest --idempotency-key).")
+    set_command_meta(s, since="0.8.0", tier="write")
+    s.set_defaults(func=cmd_prefetch)
 
     s = sub.add_parser("theme", help="Add a theme")
     s.add_argument("--name", required=True)

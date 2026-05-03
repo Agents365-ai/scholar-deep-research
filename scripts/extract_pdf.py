@@ -22,9 +22,6 @@ The script never crashes the pipeline — it always exits 0 with a JSON status.
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -33,6 +30,7 @@ from typing import Any
 from _common import (
     EXIT_RUNTIME, EXIT_UPSTREAM, EXIT_VALIDATION, err, maybe_emit_schema, ok,
 )
+from _pdf_fetch import FetchError, fetch_pdf, find_paper_fetch_script
 
 try:
     from pypdf import PdfReader
@@ -43,149 +41,21 @@ except ImportError:
         dependency="pypdf")
 
 
-# ---------- paper-fetch discovery ----------
-
-_FETCH_SCRIPT = "scripts/fetch.py"
-
-# All known skill install paths across platforms.
-# Order: Claude Code → OpenCode → OpenClaw → Hermes → agents convention.
-_CONVENTION_PATHS = [
-    Path.home() / ".claude" / "skills" / "paper-fetch" / _FETCH_SCRIPT,
-    Path.home() / ".config" / "opencode" / "skills" / "paper-fetch" / _FETCH_SCRIPT,
-    Path.home() / ".opencode" / "skills" / "paper-fetch" / _FETCH_SCRIPT,
-    Path.home() / ".openclaw" / "skills" / "paper-fetch" / _FETCH_SCRIPT,
-    Path.home() / ".hermes" / "skills" / "research" / "paper-fetch" / _FETCH_SCRIPT,
-    Path.home() / ".agents" / "skills" / "paper-fetch" / _FETCH_SCRIPT,
-]
-
-
-def _find_paper_fetch() -> Path | None:
-    """Locate paper-fetch's fetch.py. Returns path or None.
-
-    Discovery chain:
-      1. PAPER_FETCH_SCRIPT env var (explicit override)
-      2. Known skill install paths across platforms
-    """
-    env = os.environ.get("PAPER_FETCH_SCRIPT")
-    if env:
-        p = Path(env)
-        if p.is_file():
-            return p
-        print(f"[warn] PAPER_FETCH_SCRIPT={env} not found, trying convention paths",
-              file=sys.stderr)
-    for path in _CONVENTION_PATHS:
-        if path.is_file():
-            return path
-    return None
-
-
-def _fetch_via_paper_fetch(doi: str, fetch_script: Path) -> tuple[Path, dict[str, Any]]:
-    """Resolve DOI via paper-fetch skill. Returns (pdf_path, metadata)."""
-    tmpdir = tempfile.mkdtemp(prefix="scholar_fetch_")
-    result = subprocess.run(
-        [sys.executable, str(fetch_script), doi,
-         "--format", "json", "--out", tmpdir],
-        capture_output=True, text=True, timeout=120,
-    )
-    if result.returncode != 0:
-        # Try to parse structured error from paper-fetch
-        detail = result.stdout.strip() or result.stderr.strip()
-        err("paper_fetch_failed",
-            f"paper-fetch exited {result.returncode} for {doi}: {detail}",
-            retryable=result.returncode in (2, 4),
-            exit_code=EXIT_UPSTREAM, doi=doi)
-
-    try:
-        envelope = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
-        err("paper_fetch_bad_response",
-            f"paper-fetch returned non-JSON for {doi}",
-            retryable=False, exit_code=EXIT_RUNTIME, doi=doi)
-
-    if not envelope.get("ok"):
-        e = envelope.get("error", {})
-        err("paper_fetch_error",
-            e.get("message", f"paper-fetch failed for {doi}"),
-            retryable=e.get("retryable", False),
-            exit_code=EXIT_UPSTREAM, doi=doi)
-
-    data = envelope.get("data", {})
-    local_path = data.get("local_path") or data.get("path")
-    if not local_path or not Path(local_path).is_file():
-        # Check tmpdir for any PDF
-        pdfs = list(Path(tmpdir).glob("*.pdf"))
-        if pdfs:
-            local_path = str(pdfs[0])
-        else:
-            err("paper_fetch_no_pdf",
-                f"paper-fetch succeeded but no PDF found for {doi}",
-                retryable=False, exit_code=EXIT_RUNTIME, doi=doi)
-
-    fetch_meta = {
-        "doi": doi,
-        "source": data.get("source", "paper-fetch"),
-        "title": data.get("title"),
-        "authors": data.get("authors"),
-        "year": data.get("year"),
-        "pdf_url": data.get("pdf_url") or data.get("url"),
-    }
-    return Path(local_path), fetch_meta
-
-
-def _fetch_via_unpaywall(doi: str) -> tuple[Path, dict[str, Any]]:
-    """Fallback: resolve DOI via Unpaywall API directly."""
-    import httpx
-
-    email = os.environ.get("SCHOLAR_MAILTO", "scholar-deep-research@example.com")
-    api_url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
-
-    try:
-        r = httpx.get(api_url, follow_redirects=True, timeout=30.0,
-                      headers={"User-Agent": "scholar-deep-research/0.1"})
-        r.raise_for_status()
-    except httpx.HTTPError as e:
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        err("unpaywall_request_failed",
-            f"Unpaywall API failed for {doi}: {type(e).__name__}: {e}",
-            retryable=True, exit_code=EXIT_UPSTREAM,
-            doi=doi, status=status)
-
-    data = r.json()
-    best_oa = data.get("best_oa_location") or {}
-    pdf_url = best_oa.get("url_for_pdf") or best_oa.get("url")
-
-    if not pdf_url:
-        err("no_open_access_pdf",
-            f"No open-access PDF found for DOI {doi} via Unpaywall",
-            retryable=False, exit_code=EXIT_VALIDATION,
-            doi=doi, is_oa=data.get("is_oa", False))
-
-    # Download the PDF
-    try:
-        r2 = httpx.get(pdf_url, follow_redirects=True, timeout=60.0,
-                       headers={"User-Agent": "scholar-deep-research/0.1"})
-        r2.raise_for_status()
-    except httpx.HTTPError as e:
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        err("pdf_download_failed",
-            f"Failed to download PDF from {pdf_url}: {type(e).__name__}: {e}",
-            retryable=True, exit_code=EXIT_UPSTREAM,
-            doi=doi, pdf_url=pdf_url, status=status)
-
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    tmp.write(r2.content)
-    tmp.close()
-
-    fetch_meta = {
-        "doi": doi,
-        "source": "unpaywall_fallback",
-        "title": data.get("title"),
-        "authors": [a.get("family", "") + ", " + a.get("given", "")
-                     for a in (data.get("z_authors") or []) if a.get("family")],
-        "year": data.get("year"),
-        "pdf_url": pdf_url,
-    }
-    return Path(tmp.name), fetch_meta
+# ---------- FetchError → err() exit-code mapping ----------
+#
+# Single-paper extract is fail-fast: any FetchError translates to one
+# err() call with the matching exit code. The mapping preserves the
+# pre-refactor envelope-shape contract — exit codes shipped with
+# specific error codes do not change.
+_FETCH_EXIT = {
+    "paper_fetch_failed": EXIT_UPSTREAM,
+    "paper_fetch_bad_response": EXIT_RUNTIME,
+    "paper_fetch_error": EXIT_UPSTREAM,
+    "paper_fetch_no_pdf": EXIT_RUNTIME,
+    "unpaywall_request_failed": EXIT_UPSTREAM,
+    "no_open_access_pdf": EXIT_VALIDATION,
+    "pdf_download_failed": EXIT_UPSTREAM,
+}
 
 
 # ---------- extraction ----------
@@ -243,14 +113,21 @@ def main() -> None:
     fetch_meta: dict[str, Any] | None = None
 
     if args.doi:
-        fetch_script = _find_paper_fetch()
+        fetch_script = find_paper_fetch_script()
         if fetch_script:
             print(f"[info] Using paper-fetch: {fetch_script}", file=sys.stderr)
-            pdf_path, fetch_meta = _fetch_via_paper_fetch(args.doi, fetch_script)
         else:
             print("[info] paper-fetch not found, falling back to Unpaywall",
                   file=sys.stderr)
-            pdf_path, fetch_meta = _fetch_via_unpaywall(args.doi)
+        try:
+            pdf_path, fetch_meta = fetch_pdf(
+                args.doi, fetch_script=fetch_script,
+            )
+        except FetchError as e:
+            err(e.code, e.message,
+                retryable=e.retryable,
+                exit_code=_FETCH_EXIT.get(e.code, EXIT_UPSTREAM),
+                **e.ctx)
     elif args.url:
         import httpx
         try:
