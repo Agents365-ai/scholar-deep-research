@@ -224,14 +224,20 @@ def make_payload(source: str, query: str, round_: int,
 
 
 def emit(payload: dict[str, Any], output: str | None,
-         state: str | None) -> None:
+         state: str | None, *, meta: dict[str, Any] | None = None) -> None:
     """Write search payload to --output JSON and/or hand to research_state ingest.
 
     Always prints exactly one envelope to stdout:
       - with --state: envelope from apply_ingest() (routed through the state lock)
       - with --output only: {"ok": true, "data": {"output": path, "count": N, ...}}
       - with neither: {"ok": true, "data": <payload>}
+
+    `meta` is merged into the envelope's auto-meta (search-cache hit/miss
+    flags travel here from `with_search_cache`). Empty `meta` → identical
+    envelope to before, so existing scripts' output is unchanged when the
+    cache is disabled.
     """
+    extra_meta = meta or None
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,7 +256,7 @@ def emit(payload: dict[str, Any], output: str | None,
                 retryable=False, exit_code=EXIT_VALIDATION,
                 limit_kind=exc.limit_kind, limit=exc.limit,
                 current=exc.current, source=exc.source)
-        ok(summary)
+        ok(summary, meta=extra_meta)
         return
 
     if output:
@@ -260,11 +266,118 @@ def emit(payload: dict[str, Any], output: str | None,
             "query": payload.get("query"),
             "round": payload.get("round"),
             "count": len(payload.get("papers", [])),
-        })
+        }, meta=extra_meta)
         return
 
     # Neither --output nor --state: dump the whole payload, enveloped.
-    ok(payload)
+    ok(payload, meta=extra_meta)
+
+
+# ---------- search result TTL cache (opt-in) ----------
+#
+# Distinct from the idempotency cache above: this is a *natural* result cache
+# for HTTP search calls, opt-in via SCHOLAR_SEARCH_CACHE=1 with a 24h default
+# TTL. Idempotency cache names a specific run and never expires; this cache
+# names a query and expires by clock. Different concerns → different storage
+# subdirs (`searches/` vs the flat `cache_dir()/`).
+#
+# The cap is wired into the 4 stdlib search scripts; agents call them
+# normally and a cache hit returns the same papers list with a `search_cache:
+# hit` marker in the envelope's `meta`. Default OFF — existing scripts behave
+# identically until a human/orchestrator opts in.
+
+_SEARCH_CACHE_VERSION = 1
+
+
+def _search_cache_enabled() -> bool:
+    val = os.environ.get("SCHOLAR_SEARCH_CACHE", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _search_cache_ttl_seconds() -> int:
+    hours = _env_int("SCHOLAR_SEARCH_CACHE_TTL_HOURS", 24)
+    return max(0, hours) * 3600
+
+
+def _search_cache_dir() -> Path:
+    d = cache_dir() / "searches"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _search_cache_key(source: str, query: str, limit: int,
+                      filters: dict[str, Any]) -> str:
+    """Canonical key: source + normalized query + limit + sorted-filter JSON.
+
+    Whitespace in the query is collapsed and stripped so trivially-different
+    inputs share an entry. Filter keys are sorted to make `{a:1,b:2}` and
+    `{b:2,a:1}` collide.
+    """
+    norm_query = " ".join(query.split())
+    blob = json.dumps({
+        "source": source,
+        "query": norm_query,
+        "limit": int(limit),
+        "filters": filters or {},
+    }, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+
+
+def with_search_cache(*, source: str, query: str, limit: int,
+                      filters: dict[str, Any] | None,
+                      fetch: Callable[[], list[dict[str, Any]]]
+                      ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Wrap a search HTTP call with an opt-in 24h TTL cache.
+
+    Returns `(papers, meta)`. When the cache is disabled (the default), the
+    fetch always runs and `meta` is empty — so the envelope is bit-identical
+    to the pre-cache behavior. When enabled, `meta` is `{"search_cache":
+    "hit"|"miss", "cached_at": ISO}` so the agent can audit the corpus
+    provenance.
+
+    Cache failures (corrupt file, IO error) silently fall back to fetch.
+    The cache stores the *normalized papers list*, not the full envelope,
+    so the caller can still wrap it with a fresh `make_payload`/`emit`.
+    """
+    filters = dict(filters or {})
+    if not _search_cache_enabled():
+        return fetch(), {}
+
+    key = _search_cache_key(source, query, limit, filters)
+    path = _search_cache_dir() / f"{key}.json"
+    ttl = _search_cache_ttl_seconds()
+
+    if path.exists():
+        try:
+            entry = json.loads(path.read_text())
+            cached_at_str = entry.get("cached_at", "")
+            cached_at = datetime.fromisoformat(cached_at_str)
+            age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+            if ttl == 0 or age < ttl:
+                return entry["papers"], {
+                    "search_cache": "hit",
+                    "cached_at": cached_at_str,
+                }
+        except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError):
+            # Any corruption → fall through to fetch + overwrite.
+            pass
+
+    papers = fetch()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        path.write_text(json.dumps({
+            "version": _SEARCH_CACHE_VERSION,
+            "source": source,
+            "query": query,
+            "limit": int(limit),
+            "filters": filters,
+            "cached_at": now,
+            "papers": papers,
+        }, ensure_ascii=False))
+    except OSError:
+        # Don't fail the search just because we couldn't write the cache.
+        pass
+    return papers, {"search_cache": "miss"}
 
 
 def reconstruct_inverted_abstract(idx: dict[str, list[int]] | None) -> str | None:

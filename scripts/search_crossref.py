@@ -18,7 +18,7 @@ import httpx
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema, set_command_meta,
+    maybe_emit_schema, set_command_meta, with_search_cache,
 )
 
 API = "https://api.crossref.org/works"
@@ -120,14 +120,20 @@ def main() -> None:
     args = p.parse_args()
 
     try:
-        papers = search(args.query, args.limit, args.email,
-                        args.year_from, args.year_to)
+        papers, cache_meta = with_search_cache(
+            source="crossref",
+            query=args.query,
+            limit=args.limit,
+            filters={"year_from": args.year_from, "year_to": args.year_to},
+            fetch=lambda: search(args.query, args.limit, args.email,
+                                 args.year_from, args.year_to),
+        )
     except UpstreamError as e:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)
     payload = make_payload("crossref", args.query, args.round, papers)
-    emit(payload, args.output, args.state)
+    emit(payload, args.output, args.state, meta=cache_meta)
 
 
 if __name__ == "__main__":

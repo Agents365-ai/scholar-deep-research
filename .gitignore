@@ -10,4 +10,7 @@ reports/
 *.tmp.json
 .search_payload.tmp.json
 .last_update_check
+.scholar_cache/
 CLAUDE.md
+docs/competitor-analysis/landscape.md
+docs/competitor-analysis/suggestions.md

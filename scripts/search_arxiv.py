@@ -18,7 +18,7 @@ import httpx
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema, set_command_meta,
+    maybe_emit_schema, set_command_meta, with_search_cache,
 )
 
 API = "https://export.arxiv.org/api/query"
@@ -123,13 +123,19 @@ def main() -> None:
     args = p.parse_args()
 
     try:
-        papers = search(args.query, args.limit)
+        papers, cache_meta = with_search_cache(
+            source="arxiv",
+            query=args.query,
+            limit=args.limit,
+            filters={},
+            fetch=lambda: search(args.query, args.limit),
+        )
     except UpstreamError as e:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)
     payload = make_payload("arxiv", args.query, args.round, papers)
-    emit(payload, args.output, args.state)
+    emit(payload, args.output, args.state, meta=cache_meta)
 
 
 if __name__ == "__main__":
