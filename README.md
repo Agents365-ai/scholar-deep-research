@@ -8,6 +8,7 @@ An 8-phase (Phase 0..7), script-driven academic research workflow that turns a r
 
 - **End-to-end research** — from question decomposition (Phase 0) to a finished report with bibliography (Phase 7), with 7 enforced phase-transition gates in between
 - **Agent-native CLI** — structured JSON envelopes with `request_id` / `latency_ms` / `cli_version` on every response; `--idempotency-key` on every mutating command; `--dry-run` previews; destructive operations (`init --force`) gated behind a paired `--dangerous` acknowledgement; gate failures carry a `next: [commands]` hint so agents recover without a discovery round-trip
+- **Parallel deep-read fan-out (Phase 3)** — selected papers split into `deep` / `skim` / `defer` tiers via deterministic triage. Deep tier dispatched in parallel waves of 8–10 agents, each reading one PDF in an isolated context bubble and writing structured evidence back through the exclusive-locked CLI. Skim tier auto-fills an abstract-derived evidence stub — no agent fan-out needed. Tunable via `--deep-ratio` / `--skim-ratio`; defaults shave roughly 50% off Phase 3 cost without losing coverage
 - **4 federated sources** — OpenAlex (primary, free, 240M+ works), arXiv (preprints), Crossref (DOI metadata), PubMed (biomedical)
 - **Transparent ranking** — papers are scored with a published formula (`α·relevance + β·citations + γ·recency + δ·venue_prior`), components written into state
 - **Deduplication across sources** — DOI-first, then title-similarity merge; one paper, one record
@@ -54,6 +55,7 @@ Works with all major AI coding agents that support the [Agent Skills](https://ag
 | BibTeX / CSL-JSON / RIS export | No | Yes — generated from state |
 | PDF text extraction | Sometimes | Yes — pypdf with scanned-PDF detection |
 | Confirmation-bias backstop | No | Yes — explicit critique search for top-cited papers |
+| Parallel deep-read fan-out | No — sequential per paper | Yes — agent dispatch in waves of 8–10 + tier-aware triage |
 | MCP graceful degradation | N/A | Yes — scripts work even when MCP times out |
 
 ### vs Other research skills
@@ -85,8 +87,8 @@ Works with all major AI coding agents that support the [Agent Skills](https://ag
 ```
 Phase 0  Scope        question decomposition + archetype + state init
 Phase 1  Discovery    multi-source search → dedupe → saturation check
-Phase 2  Triage       transparent ranking → top-N selection
-Phase 3  Deep read    PDF extract → evidence per paper
+Phase 2  Triage       transparent ranking → top-N selection → tier triage (deep/skim/defer)
+Phase 3  Deep read    parallel agent fan-out (deep tier) + abstract stub (skim tier)
 Phase 4  Chasing      citation graph (forward + backward)
 Phase 5  Synthesis    thematic clustering → tension map
 Phase 6  Self-critique  14-point adversarial checklist (mandatory)
@@ -300,8 +302,11 @@ The output lives at `reports/<slug>_<YYYYMMDD>.md` plus a `.bib` bibliography.
 
 [Phase 2] Ranking with literature-review weights...
           Top 20 selected. Score components written to state.
+          Triage: 10 deep + 10 skim (--deep-ratio 0.5).
 
-[Phase 3] 17/20 full text, 3 abstract-only (flagged shallow).
+[Phase 3] Deep tier: 10 parallel agents dispatched (1 wave).
+          9 returned full evidence, 1 evidence_unavailable (paywall, no OA).
+          Skim tier: 10 abstract-derived evidence stubs auto-filled.
 
 [Phase 4] Citation chasing on top 8 seeds, depth 1.
           Added 24 candidates, 6 re-scored into top 20.
@@ -335,6 +340,7 @@ scholar-deep-research/
 │   ├── search_pubmed.py           # NCBI E-utilities
 │   ├── dedupe_papers.py           # Cross-source deduplication
 │   ├── rank_papers.py             # Transparent scoring
+│   ├── skim_papers.py             # Phase-3 tier triage (deep/skim/defer)
 │   ├── build_citation_graph.py    # Forward + backward snowball
 │   ├── extract_pdf.py             # PDF extraction with DOI resolution (paper-fetch / Unpaywall)
 │   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
@@ -343,7 +349,9 @@ scholar-deep-research/
 │   ├── source_selection.md        # Which database for which question
 │   ├── quality_assessment.md      # CRAAP, tier, retraction, preprints
 │   ├── report_templates.md        # Archetype selection guide
-│   └── pitfalls.md                # 14 failure modes with fixes
+│   ├── pitfalls.md                # 14 failure modes with fixes
+│   └── agent_prompts/
+│       └── phase3_deep_read.md    # Per-paper prompt for parallel agent fan-out
 └── assets/
     ├── templates/
     │   ├── literature_review.md
