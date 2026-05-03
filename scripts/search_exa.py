@@ -31,11 +31,25 @@ from typing import Any
 # `--schema` introspection works on machines without exa-py installed.
 
 from _common import (
-    USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema,
+    EXIT_RUNTIME, USER_AGENT, UpstreamError, emit, err, make_paper,
+    make_payload, maybe_emit_schema, set_command_meta,
 )
 
 INTEGRATION_ID = "scholar-deep-research"
+
+
+class _DependencyMissing(Exception):
+    """Raised when an optional runtime dependency is not installed.
+
+    Routed by main() to a dedicated `dependency_missing` envelope so an
+    agent can distinguish "transient API failure, retry later" from "the
+    human needs to pip install something".
+    """
+
+    def __init__(self, dependency: str, message: str) -> None:
+        super().__init__(message)
+        self.dependency = dependency
+        self.message = message
 
 # Matches a DOI anywhere in a URL path. Conservative on the tail — allows
 # alphanumerics, dots, dashes, underscores, slashes, parens. Trims trailing
@@ -86,6 +100,20 @@ def _extract_snippet(result: Any) -> str | None:
     return None
 
 
+def _str_or_none(v: Any) -> str | None:
+    """Coerce empty / whitespace-only strings to None.
+
+    Exa sometimes returns `title=""` (and occasionally `url=""`) on PDF-only
+    results where the crawler did not extract a heading. Without this coercion
+    those would propagate as empty strings into the state file and silently
+    corrupt dedupe (two empty titles compare equal under similarity) and rank
+    (empty title scores against a missing-data heuristic, not zero).
+    """
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    return None
+
+
 def _authors_list(result: Any) -> list[str]:
     """Exa returns either `author` (str) or `authors` (list). Normalize."""
     authors = getattr(result, "authors", None)
@@ -101,12 +129,13 @@ def _authors_list(result: Any) -> list[str]:
 
 
 def _normalize(result: Any) -> dict[str, Any]:
-    url = getattr(result, "url", None)
+    url = _str_or_none(getattr(result, "url", None))
+    title = _str_or_none(getattr(result, "title", None))
     doi = _doi_from_url(url)
     published = getattr(result, "published_date", None) or getattr(result, "publishedDate", None)
     return make_paper(
         doi=doi,
-        title=getattr(result, "title", None),
+        title=title,
         authors=_authors_list(result),
         year=_year_from_published(published),
         venue=None,
@@ -135,11 +164,9 @@ def search(
     try:
         from exa_py import Exa
     except ImportError as e:
-        raise UpstreamError(
-            "exa",
+        raise _DependencyMissing(
+            "exa-py",
             f"exa-py is not installed: {e}. Install with `pip install exa-py`.",
-            retryable=False,
-            exit_code=1,
         ) from e
 
     client = Exa(api_key=api_key, user_agent=USER_AGENT)
@@ -196,8 +223,12 @@ def _split_csv(values: list[str] | None) -> list[str] | None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Search the web via Exa.")
+    set_command_meta(p, since="0.6.0", tier="read")
     p.add_argument("--query", required=True)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--limit", type=int, default=50,
+        help="Number of results (default: 50, max: 100 per call — Exa cap)",
+    )
     p.add_argument(
         "--type",
         dest="search_type",
@@ -273,6 +304,9 @@ def main() -> None:
             include_text=_split_csv(args.include_text),
             exclude_text=_split_csv(args.exclude_text),
         )
+    except _DependencyMissing as e:
+        err("dependency_missing", e.message,
+            retryable=False, exit_code=EXIT_RUNTIME, dependency=e.dependency)
     except UpstreamError as e:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,

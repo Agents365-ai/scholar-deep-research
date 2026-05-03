@@ -20,7 +20,7 @@ from typing import Any
 
 from _common import (
     USER_AGENT, UpstreamError, make_paper, make_payload, emit, err,
-    maybe_emit_schema, reconstruct_inverted_abstract,
+    maybe_emit_schema, reconstruct_inverted_abstract, set_command_meta,
 )
 
 API = "https://api.openalex.org/works"
@@ -122,6 +122,7 @@ def _normalize(w: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Search OpenAlex.")
+    set_command_meta(p, since="0.1.0", tier="read")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--email",

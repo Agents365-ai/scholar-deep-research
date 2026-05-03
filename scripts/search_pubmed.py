@@ -23,7 +23,7 @@ from typing import Any
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema,
+    maybe_emit_schema, set_command_meta,
 )
 
 ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -121,6 +121,7 @@ def _normalize(rec: dict[str, Any], pmid: str,
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Search PubMed.")
+    set_command_meta(p, since="0.1.0", tier="read")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--api-key",

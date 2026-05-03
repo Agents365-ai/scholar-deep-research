@@ -165,6 +165,26 @@ class NormalizeTest(unittest.TestCase):
         paper = search_exa._normalize(r)
         self.assertIsNone(paper["abstract"])
 
+    def test_empty_string_title_becomes_none(self) -> None:
+        # Exa returns title="" on PDF-only results where the crawler did
+        # not extract a heading. Must propagate as None so downstream
+        # dedupe (title-similarity) and rank do not treat "" as a valid title.
+        r = _fake_result(url="https://example.com/paper.pdf", title="",
+                         text="Body text.")
+        paper = search_exa._normalize(r)
+        self.assertIsNone(paper["title"])
+
+    def test_whitespace_title_becomes_none(self) -> None:
+        r = _fake_result(url="https://example.com/x", title="   \n  ")
+        paper = search_exa._normalize(r)
+        self.assertIsNone(paper["title"])
+
+    def test_empty_string_url_becomes_none(self) -> None:
+        r = _fake_result(url="", title="X")
+        paper = search_exa._normalize(r)
+        self.assertIsNone(paper["url"])
+        self.assertIsNone(paper["pdf_url"])
+
     def test_camelcase_published_date_also_accepted(self) -> None:
         # exa-py has varied between snake_case and camelCase across versions.
         r = SimpleNamespace(
