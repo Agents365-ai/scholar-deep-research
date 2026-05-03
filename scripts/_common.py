@@ -30,7 +30,7 @@ from typing import Any, Callable
 
 # Canonical version string. Bump in lockstep with the `version` field in
 # SKILL.md frontmatter so USER_AGENT, telemetry, and skill metadata agree.
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 
 USER_AGENT = (
     f"scholar-deep-research/{VERSION} "
@@ -45,6 +45,33 @@ EXIT_RUNTIME = 1     # runtime / API logic error (e.g. malformed upstream respon
 EXIT_UPSTREAM = 2    # upstream / network error (retryable)
 EXIT_VALIDATION = 3  # bad input: missing flag, bad value, whitelist violation
 EXIT_STATE = 4       # state file missing, corrupt, or schema mismatch
+
+
+# ---------- Phase 1 budget envelope ----------
+# Caps on Phase 1 ingestion to prevent runaway agent loops (e.g. a
+# stricter-than-achievable saturation target driving infinite rounds).
+# Read at every check, not at module import, so tests and orchestrators
+# can override per-process. ENV-only override — agents cannot raise
+# their own ceiling (P2 trust boundary).
+
+def _env_int(name: str, default: int) -> int:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
+def phase1_max_rounds() -> int:
+    """Cap on distinct discovery rounds before Phase 1 refuses further ingest."""
+    return _env_int("SCHOLAR_PHASE1_MAX_ROUNDS", 5)
+
+
+def phase1_max_requests_per_source() -> int:
+    """Cap on per-source ingest events during Phase 1 (one event = one query call)."""
+    return _env_int("SCHOLAR_PHASE1_MAX_REQUESTS_PER_SOURCE", 20)
 
 
 # ---------- TTY detection ----------
@@ -215,8 +242,14 @@ def emit(payload: dict[str, Any], output: str | None,
         # Concurrent searches are serialized by the state lock inside
         # apply_ingest, so Phase 1 fanout is race-free.
         # Lazy import avoids a circular dependency at module load.
-        from research_state import apply_ingest
-        summary = apply_ingest(Path(state), payload)
+        from research_state import Phase1BudgetExhausted, apply_ingest
+        try:
+            summary = apply_ingest(Path(state), payload)
+        except Phase1BudgetExhausted as exc:
+            err("phase1_budget_exhausted", str(exc),
+                retryable=False, exit_code=EXIT_VALIDATION,
+                limit_kind=exc.limit_kind, limit=exc.limit,
+                current=exc.current, source=exc.source)
         ok(summary)
         return
 
