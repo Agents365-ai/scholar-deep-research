@@ -185,6 +185,28 @@ class UpstreamError(Exception):
         self.exit_code = exit_code
         self.status = status
 
+
+def record_search_failure(state_path: str | None, source: str, message: str,
+                          *, status: int | None = None) -> None:
+    """Persist an upstream search failure into state.search_diagnostics.
+
+    No-op when --state is absent (agent ran a stand-alone search). When
+    state is present, calls research_state.apply_search_failure under the
+    state lock so concurrent failures from parallel searches are race-free.
+
+    Best-effort: any error writing to state is silently swallowed (the
+    primary failure is already on its way to err()) — we do not want a
+    diagnostic write failure to mask the real upstream error.
+    """
+    if not state_path:
+        return
+    try:
+        from research_state import apply_search_failure
+        apply_search_failure(Path(state_path), source, message, status=status)
+    except Exception:
+        # Diagnostic writes are advisory; never block the real error path.
+        pass
+
 # Fields that every normalized paper should have (None if unknown).
 PAPER_FIELDS = (
     "doi", "title", "authors", "year", "venue", "abstract",

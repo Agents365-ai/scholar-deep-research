@@ -20,8 +20,8 @@ from typing import Any
 
 from _common import (
     USER_AGENT, UpstreamError, make_paper, make_payload, emit, err,
-    maybe_emit_schema, reconstruct_inverted_abstract, set_command_meta,
-    with_search_cache,
+    maybe_emit_schema, reconstruct_inverted_abstract, record_search_failure,
+    set_command_meta, with_search_cache,
 )
 
 API = "https://api.openalex.org/works"
@@ -153,6 +153,7 @@ def main() -> None:
                                  args.year_from, args.year_to),
         )
     except UpstreamError as e:
+        record_search_failure(args.state, e.source, e.message, status=e.status)
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)

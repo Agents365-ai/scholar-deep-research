@@ -133,6 +133,10 @@ def load_state(path: Path) -> dict[str, Any]:
             retryable=False, exit_code=EXIT_STATE,
             path=str(path))
     _validate_state_shape(state, path)
+    # Back-fill optional slices added after the state's creation. These are
+    # not in `_REQUIRED_STATE_KEYS` and not version-bumped — they default
+    # to empty so older state files load without intervention.
+    state.setdefault("search_diagnostics", {})
     return state
 
 
@@ -297,6 +301,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "themes": [],
         "tensions": [],
         "self_critique": {"findings": [], "resolved": [], "appendix": ""},
+        "search_diagnostics": {},
         "report_path": None,
     }
     # init writes a fresh file; no prior state to RMW. --force controls
@@ -465,6 +470,76 @@ def apply_ingest(state_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
 # functions are the ONLY supported write path — `_save_state` is private and
 # only used from inside the lock. Together they enforce the "only research_state
 # writes the state file" invariant at the module boundary.
+
+def apply_search_failure(state_path: Path, source: str, message: str,
+                         *, status: int | None = None) -> dict[str, Any]:
+    """Record a failed upstream search call into search_diagnostics.
+
+    Called by the 4 stdlib search scripts (openalex/arxiv/pubmed/crossref)
+    from their `except UpstreamError` block, so the report-writer in
+    Phase 7 can footnote which sources were unreachable. Successes are
+    not separately persisted — they are implicit in `state.queries` and
+    `state.papers[*].source`.
+
+    Increments `failures` and overwrites `last_error` with the most
+    recent message + status + ISO timestamp. Returns the updated entry.
+    """
+    entry: dict[str, Any] = {}
+
+    def mutator(state: dict[str, Any]) -> dict[str, Any]:
+        diagnostics = state.setdefault("search_diagnostics", {})
+        existing = diagnostics.setdefault(source, {"failures": 0, "last_error": None})
+        existing["failures"] = int(existing.get("failures", 0)) + 1
+        existing["last_error"] = {
+            "message": message,
+            "status": status,
+            "timestamp": now_iso(),
+        }
+        entry.update(existing)
+        return state
+
+    _locked_rmw(state_path, mutator)
+    return entry
+
+
+def compute_source_diagnostics(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per-source roll-up: requests, papers_contributed, failures, last_error.
+
+    Pure function over the state dict — read by both `cmd_query` and
+    `cmd_saturation` so they share one source of truth. A source appears
+    in the output if it has *any* signal (a successful query, a paper
+    tagged with the source, or a recorded failure).
+    """
+    sources: set[str] = set()
+    requests_by_source: dict[str, int] = {}
+    for q in state.get("queries") or []:
+        src = q.get("source")
+        if not src:
+            continue
+        sources.add(src)
+        requests_by_source[src] = requests_by_source.get(src, 0) + 1
+
+    papers_by_source: dict[str, int] = {}
+    for p in (state.get("papers") or {}).values():
+        for src in (p.get("source") or []):
+            sources.add(src)
+            papers_by_source[src] = papers_by_source.get(src, 0) + 1
+
+    diagnostics = state.get("search_diagnostics") or {}
+    for src in diagnostics.keys():
+        sources.add(src)
+
+    out: dict[str, dict[str, Any]] = {}
+    for src in sorted(sources):
+        diag = diagnostics.get(src) or {}
+        out[src] = {
+            "requests": requests_by_source.get(src, 0),
+            "papers_contributed": papers_by_source.get(src, 0),
+            "failures": int(diag.get("failures") or 0),
+            "last_error": diag.get("last_error"),
+        }
+    return out
+
 
 def apply_ranking(
     state_path: Path,
@@ -925,6 +1000,38 @@ def cmd_saturation(args: argparse.Namespace) -> None:
     except SaturationInputError as exc:
         err(exc.code, exc.message,
             retryable=False, exit_code=EXIT_VALIDATION, **exc.ctx)
+    # Enrich per-source entries with end-state diagnostics so the report
+    # writer can footnote "PubMed unreachable; corpus may be biased".
+    # overall_saturated is left untouched — failure-only sources do not
+    # block saturation (they never contributed any data to compare against).
+    diagnostics = compute_source_diagnostics(state)
+    for src, diag in diagnostics.items():
+        existing = result["per_source"].get(src)
+        if existing is None:
+            # Source had only failures (or only out-of-band paper contributions
+            # not paired with a query). Surface as a stub so it appears in
+            # the report.
+            result["per_source"][src] = {
+                "rounds_run": 0,
+                "last_round": None,
+                "last_query": None,
+                "hits_last_round": 0,
+                "new_last_round": 0,
+                "new_pct": None,
+                "new_authors_pct": None,
+                "new_venues_pct": None,
+                "max_new_citations": 0,
+                "saturated": None,
+                "requests": diag["requests"],
+                "papers_contributed": diag["papers_contributed"],
+                "failures": diag["failures"],
+                "last_error": diag["last_error"],
+            }
+        else:
+            existing["requests"] = diag["requests"]
+            existing["papers_contributed"] = diag["papers_contributed"]
+            existing["failures"] = diag["failures"]
+            existing["last_error"] = diag["last_error"]
     ok(result)
 
 
@@ -990,6 +1097,9 @@ def cmd_query(args: argparse.Namespace) -> None:
     elif args.what == "critique":
         ok(state.get("self_critique",
                      {"findings": [], "resolved": [], "appendix": ""}))
+        return
+    elif args.what == "diagnostics":
+        ok(compute_source_diagnostics(state))
         return
     else:
         err("unknown_query",
@@ -1390,7 +1500,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("query", help="Read a slice of state")
     s.add_argument("what", choices=["summary", "selected", "papers", "queries",
-                                    "themes", "tensions", "critique"])
+                                    "themes", "tensions", "critique",
+                                    "diagnostics"])
     s.set_defaults(func=cmd_query)
 
     s = sub.add_parser("evidence", help="Attach evidence to a paper")
