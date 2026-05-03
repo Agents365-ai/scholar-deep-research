@@ -8,6 +8,7 @@
 
 - **端到端研究流程** — 从问题拆解（Phase 0）到带参考文献的成稿报告（Phase 7），中间强制执行 7 道阶段跃迁门控
 - **Agent-native CLI** — 每个响应都带 `request_id` / `latency_ms` / `cli_version` 的结构化 JSON 信封；每个会变更状态的命令都支持 `--idempotency-key`；提供 `--dry-run` 预览；破坏性操作（如 `init --force`）必须配合 `--dangerous` 确认；门控失败的错误信封会附带 `next: [命令]` 提示，让 agent 无需额外的发现轮次即可恢复
+- **Phase 3 并行精读** — top-N 论文经确定性 triage 切成 `deep` / `skim` / `defer` 三档。deep 档以每波 8–10 个 agent 的方式并发派发,各自在隔离上下文里读一篇 PDF、把结构化证据通过独占锁 CLI 写回 state;skim 档自动从摘要生成证据片段,不派 agent。可通过 `--deep-ratio` / `--skim-ratio` 调节,默认配置约削减 50% 的 Phase 3 成本而不损失覆盖
 - **4 个联邦数据源** — OpenAlex（主源，免费、240M+ 论文）、arXiv（预印本）、Crossref（DOI 元数据）、PubMed（生物医学）
 - **透明排序公式** — 论文按公开公式打分（`α·相关性 + β·引用 + γ·时效 + δ·期刊先验`），各项分量写入 state
 - **跨源去重** — DOI 优先 + 标题相似度兜底，一篇论文仅一条记录
@@ -54,6 +55,7 @@
 | BibTeX / CSL-JSON / RIS 导出 | 否 | 是 — 从 state 生成 |
 | PDF 文本提取 | 偶尔 | 是 — pypdf + 扫描版检测 |
 | 确认偏误兜底 | 否 | 是 — 显式搜索高引论文的批评 |
+| 并行精读派发 | 否 — 逐篇串行 | 是 — 每波 8–10 个 agent + 分档 triage |
 | MCP 优雅降级 | 不适用 | 是 — MCP 超时仍可完成 |
 
 ### 与其他研究类 skill 对比
@@ -85,8 +87,8 @@
 ```
 Phase 0  Scope        问题拆解 + 原型选择 + 状态初始化
 Phase 1  Discovery    多源检索 → 去重 → 饱和度检查
-Phase 2  Triage       透明排序 → top-N 选择
-Phase 3  Deep read    PDF 提取 → 每篇论文证据抽取
+Phase 2  Triage       透明排序 → top-N 选择 → 分档 triage（deep / skim / defer）
+Phase 3  Deep read    deep 档并行 agent 派发 + skim 档摘要证据片段
 Phase 4  Chasing      引用网络（正向 + 反向）
 Phase 5  Synthesis    主题聚类 → 张力图谱
 Phase 6  Self-critique  14 项对抗性检查清单（强制）
@@ -299,8 +301,11 @@ pip install -r requirements.txt              # 仅当看到依赖变化提示时
 
 [Phase 2] 按文献综述权重排序...
           选出 top 20。各项分量已写入 state。
+          Triage：10 deep + 10 skim（--deep-ratio 0.5）。
 
-[Phase 3] 17/20 全文，3 篇仅摘要（标记为 shallow）。
+[Phase 3] Deep 档：派发 10 个并行 agent（1 波）。
+          9 个返回完整证据，1 个 evidence_unavailable（付费墙、无 OA 渠道）。
+          Skim 档：10 篇自动生成摘要级证据片段。
 
 [Phase 4] 对 top 8 种子做 depth=1 引用追踪。
           新增 24 个候选，6 个进入 top 20。
@@ -333,6 +338,7 @@ scholar-deep-research/
 │   ├── search_pubmed.py           # NCBI E-utilities
 │   ├── dedupe_papers.py           # 跨源去重
 │   ├── rank_papers.py             # 透明打分
+│   ├── skim_papers.py             # Phase 3 分档 triage（deep / skim / defer）
 │   ├── build_citation_graph.py    # 正向 + 反向滚雪球
 │   ├── extract_pdf.py             # PDF 提取 + DOI 解析（paper-fetch / Unpaywall）
 │   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
@@ -341,7 +347,9 @@ scholar-deep-research/
 │   ├── source_selection.md        # 哪个数据库适合哪类问题
 │   ├── quality_assessment.md      # CRAAP、期刊层级、撤稿、预印本
 │   ├── report_templates.md        # 原型选择指南
-│   └── pitfalls.md                # 14 类失败模式与修复
+│   ├── pitfalls.md                # 14 类失败模式与修复
+│   └── agent_prompts/
+│       └── phase3_deep_read.md    # Phase 3 并行 agent 派发的逐篇 prompt 模板
 └── assets/
     ├── templates/
     │   ├── literature_review.md
