@@ -103,6 +103,11 @@ python scripts/search_arxiv.py  --query "<cluster>" --limit 50 --state research_
 python scripts/search_pubmed.py --query "<cluster>" --limit 50 --state research_state.json  # biomedical
 python scripts/search_crossref.py --query "<cluster>" --limit 50 --state research_state.json  # DOI-backed metadata
 
+# Open-web coverage (optional, requires EXA_API_KEY) — finds material the
+# scholarly APIs miss: lab sites, institutional PDFs, conference mirrors,
+# preprints parked outside arXiv, NGO/government reports.
+python scripts/search_exa.py --query "<cluster>" --limit 50 --state research_state.json
+
 # Dedupe across sources (DOI-first, title-similarity fallback)
 python scripts/dedupe_papers.py --state research_state.json
 ```
@@ -247,6 +252,7 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 | `search_arxiv.py` | arXiv API — preprints and CS/ML/physics. |
 | `search_crossref.py` | Crossref REST — authoritative DOI metadata. |
 | `search_pubmed.py` | NCBI E-utilities — biomedical corpus with MeSH. |
+| `search_exa.py` | Exa neural web search (optional, key-gated) — open-web coverage the scholarly APIs miss. |
 | `dedupe_papers.py` | DOI normalization + title similarity merging across sources. |
 | `rank_papers.py` | Transparent scoring formula. Prints the formula and per-paper components. |
 | `build_citation_graph.py` | Forward/backward snowballing via OpenAlex. |
@@ -307,6 +313,7 @@ Trust-boundary configuration — set once by the human or orchestrator. CLI flag
 | `SCHOLAR_STATE_PATH` | every script that takes `--state` | Default path to `research_state.json` |
 | `SCHOLAR_MAILTO` | `search_openalex.py`, `search_crossref.py`, `build_citation_graph.py` | Polite-pool email for OpenAlex / Crossref — higher rate limits |
 | `NCBI_API_KEY` | `search_pubmed.py` | NCBI E-utilities API key — higher rate limits |
+| `EXA_API_KEY` | `search_exa.py` | Exa API key — required to enable the open-web search provider |
 | `SCHOLAR_CACHE_DIR` | `build_citation_graph.py` (any command that takes `--idempotency-key`) | Cache directory for idempotent-retry responses; default `.scholar_cache/` in cwd |
 | `PAPER_FETCH_SCRIPT` | `extract_pdf.py` | Path to paper-fetch's `fetch.py`. If unset, auto-discovers across all known skill install paths (Claude Code, OpenCode, OpenClaw, Hermes, ~/.agents). If not found, falls back to Unpaywall |
 | `SCHOLAR_SKIP_UPDATE_CHECK` | `check_update.py` | Set to any non-empty value to pin the current version and skip Phase 0 Step 0's auto-update |
