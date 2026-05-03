@@ -18,7 +18,7 @@ import httpx
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema,
+    maybe_emit_schema, set_command_meta,
 )
 
 API = "https://api.crossref.org/works"
@@ -100,6 +100,7 @@ def _normalize(it: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Search Crossref.")
+    set_command_meta(p, since="0.1.0", tier="read")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--email",

@@ -31,11 +31,25 @@ from typing import Any
 # `--schema` introspection works on machines without exa-py installed.
 
 from _common import (
-    USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema,
+    EXIT_RUNTIME, USER_AGENT, UpstreamError, emit, err, make_paper,
+    make_payload, maybe_emit_schema, set_command_meta,
 )
 
 INTEGRATION_ID = "scholar-deep-research"
+
+
+class _DependencyMissing(Exception):
+    """Raised when an optional runtime dependency is not installed.
+
+    Routed by main() to a dedicated `dependency_missing` envelope so an
+    agent can distinguish "transient API failure, retry later" from "the
+    human needs to pip install something".
+    """
+
+    def __init__(self, dependency: str, message: str) -> None:
+        super().__init__(message)
+        self.dependency = dependency
+        self.message = message
 
 # Matches a DOI anywhere in a URL path. Conservative on the tail — allows
 # alphanumerics, dots, dashes, underscores, slashes, parens. Trims trailing
@@ -135,11 +149,9 @@ def search(
     try:
         from exa_py import Exa
     except ImportError as e:
-        raise UpstreamError(
-            "exa",
+        raise _DependencyMissing(
+            "exa-py",
             f"exa-py is not installed: {e}. Install with `pip install exa-py`.",
-            retryable=False,
-            exit_code=1,
         ) from e
 
     client = Exa(api_key=api_key, user_agent=USER_AGENT)
@@ -196,8 +208,12 @@ def _split_csv(values: list[str] | None) -> list[str] | None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Search the web via Exa.")
+    set_command_meta(p, since="0.6.0", tier="read")
     p.add_argument("--query", required=True)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--limit", type=int, default=50,
+        help="Number of results (default: 50, max: 100 per call — Exa cap)",
+    )
     p.add_argument(
         "--type",
         dest="search_type",
@@ -273,6 +289,9 @@ def main() -> None:
             include_text=_split_csv(args.include_text),
             exclude_text=_split_csv(args.exclude_text),
         )
+    except _DependencyMissing as e:
+        err("dependency_missing", e.message,
+            retryable=False, exit_code=EXIT_RUNTIME, dependency=e.dependency)
     except UpstreamError as e:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,

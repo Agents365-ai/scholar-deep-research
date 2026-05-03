@@ -18,7 +18,7 @@ import httpx
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema,
+    maybe_emit_schema, set_command_meta,
 )
 
 API = "http://export.arxiv.org/api/query"
@@ -108,6 +108,7 @@ def _normalize(entry: ET.Element) -> dict:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Search arXiv.")
+    set_command_meta(p, since="0.1.0", tier="read")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--round", type=int, default=1)
