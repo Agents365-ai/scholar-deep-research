@@ -100,6 +100,20 @@ def _extract_snippet(result: Any) -> str | None:
     return None
 
 
+def _str_or_none(v: Any) -> str | None:
+    """Coerce empty / whitespace-only strings to None.
+
+    Exa sometimes returns `title=""` (and occasionally `url=""`) on PDF-only
+    results where the crawler did not extract a heading. Without this coercion
+    those would propagate as empty strings into the state file and silently
+    corrupt dedupe (two empty titles compare equal under similarity) and rank
+    (empty title scores against a missing-data heuristic, not zero).
+    """
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    return None
+
+
 def _authors_list(result: Any) -> list[str]:
     """Exa returns either `author` (str) or `authors` (list). Normalize."""
     authors = getattr(result, "authors", None)
@@ -115,12 +129,13 @@ def _authors_list(result: Any) -> list[str]:
 
 
 def _normalize(result: Any) -> dict[str, Any]:
-    url = getattr(result, "url", None)
+    url = _str_or_none(getattr(result, "url", None))
+    title = _str_or_none(getattr(result, "title", None))
     doi = _doi_from_url(url)
     published = getattr(result, "published_date", None) or getattr(result, "publishedDate", None)
     return make_paper(
         doi=doi,
-        title=getattr(result, "title", None),
+        title=title,
         authors=_authors_list(result),
         year=_year_from_published(published),
         venue=None,
