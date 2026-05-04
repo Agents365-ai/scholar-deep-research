@@ -147,6 +147,34 @@ class SaturationAxesTest(unittest.TestCase):
         # We ASSERT the venue axis is null and not blocking.
         self.assertIsNone(ps["new_venues_pct"])
 
+    def test_single_venue_source_skips_venue_axis(self) -> None:
+        """bioRxiv-style: every paper has venue='bioRxiv'. The venue axis
+        carries no signal (always 0% new) and would falsely tilt the AND-clause
+        toward saturation. It must report null, same as venueless sources."""
+        r1 = {
+            f"p{i}": _paper(
+                f"p{i}", source="biorxiv", round_=1,
+                authors=[f"A{i}"], venue="bioRxiv",
+            )
+            for i in range(1, 6)
+        }
+        r2 = {
+            "p6": _paper(
+                "p6", source="biorxiv", round_=2,
+                authors=["A6"], venue="bioRxiv",
+            ),
+        }
+        state = _state(
+            queries=[
+                {"source": "biorxiv", "query": "q", "round": 1, "hits": 5, "new": 5},
+                {"source": "biorxiv", "query": "q", "round": 2, "hits": 5, "new": 1},
+            ],
+            papers={**r1, **r2},
+        )
+        sat = compute_saturation(state)
+        ps = sat["per_source"]["biorxiv"]
+        self.assertIsNone(ps["new_venues_pct"])
+
     def test_thresholds_are_configurable(self) -> None:
         """Stricter author threshold can flip a previously-saturated source."""
         r1 = {

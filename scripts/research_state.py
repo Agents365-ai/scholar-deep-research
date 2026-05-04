@@ -923,7 +923,11 @@ def compute_saturation(
 
         all_venues = prior_venues | last_venues
         new_venues_pct: float | None
-        if all_venues:
+        # Need ≥2 distinct venues for the axis to carry signal. Single-venue
+        # sources (preprint servers like bioRxiv where every paper's venue is
+        # "bioRxiv") would otherwise compute 0% forever and bias the AND-clause
+        # toward false-saturation.
+        if len(all_venues) > 1:
             new_venues_pct = round(
                 len(last_venues - prior_venues) / len(all_venues) * 100, 1
             )
