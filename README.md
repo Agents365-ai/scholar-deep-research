@@ -127,6 +127,10 @@ flowchart LR
 
 Every phase reads and writes `research_state.json` — it's the single source of truth that makes the workflow resumable and auditable. Phase 6 (self-critique) can loop back to Phase 1 when it finds gaps; everything else is linear.
 
+### Design posture: deterministic spine, agentic skin
+
+Every script under `scripts/` is pure data — search, dedupe, rank, citation-chase, bibliography export. **Zero LLM calls inside the pipeline.** The host LLM is the orchestrator: it reads `SKILL.md`, calls the CLI tools, decides what to do next based on JSON envelopes coming back. This separation buys three properties that LLM-in-the-loop pipelines can't have: **reproducibility** (same state → same output, no model nondeterminism), **auditability** (every mutation flows through one `research_state.py` boundary), and **testability** (the 124-test smoke suite at `scripts/tests/run.py` runs in ~4 s with no API keys, no network, no model). MCP tools and the host LLM enrich the agent's decisions; they never sit on the critical path.
+
 ## Prerequisites
 
 - **Python ≥ 3.9**
