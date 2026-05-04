@@ -245,6 +245,41 @@ def make_payload(source: str, query: str, round_: int,
     }
 
 
+def resolve_search_round(state_path: str | None, source: str,
+                         explicit: int | None) -> int:
+    """Decide which round number to label this search call.
+
+    If `--round` was explicitly passed (`explicit is not None`), return
+    it unchanged — the agent retains full control. Otherwise inspect
+    `state.queries` and return `max(round seen for this source) + 1`,
+    or `1` when no prior round exists for that source. Falls back to 1
+    when state is absent or unreadable.
+
+    Why this matters: saturation tracking in `research_state.py
+    saturation` partitions papers by `last_round = max(queries[source]
+    .round)`. If every search call defaults to `round=1`, every paper
+    has `first_seen_round=1`, and the saturation `max_new_citations`
+    window spans the entire corpus — a single highly-cited paper
+    (Geneformer, scGPT) blocks per-source saturation forever. Auto-
+    detecting the next round per source closes this trap by default
+    while preserving the explicit-override path.
+    """
+    if explicit is not None:
+        return explicit
+    if not state_path:
+        return 1
+    try:
+        state = json.loads(Path(state_path).read_text())
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return 1
+    rounds = [
+        q.get("round", 0)
+        for q in (state.get("queries") or [])
+        if q.get("source") == source and isinstance(q.get("round"), int)
+    ]
+    return (max(rounds) + 1) if rounds else 1
+
+
 def emit(payload: dict[str, Any], output: str | None,
          state: str | None, *, meta: dict[str, Any] | None = None) -> None:
     """Write search payload to --output JSON and/or hand to research_state ingest.

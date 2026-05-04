@@ -27,8 +27,8 @@ from typing import Any
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema, record_search_failure, set_command_meta,
-    with_search_cache,
+    maybe_emit_schema, record_search_failure, resolve_search_round,
+    set_command_meta, with_search_cache,
 )
 
 API = "https://dblp.org/search/publ/api"
@@ -118,8 +118,10 @@ def main() -> None:
     set_command_meta(p, since="0.10.0", tier="read")
     p.add_argument("--query", required=True)
     p.add_argument("--limit", type=int, default=50)
-    p.add_argument("--round", type=int, default=1,
-                   help="Search round (used by saturation tracking)")
+    p.add_argument("--round", type=int, default=None,
+                   help="Search round (used by saturation tracking). "
+                        "Default: auto-detect from --state — if the source "
+                        "has prior queries, use max(round)+1; otherwise 1.")
     p.add_argument("--output", help="Write payload JSON to this path")
     p.add_argument("--state",
                    default=os.environ.get("SCHOLAR_STATE_PATH"),
@@ -143,7 +145,11 @@ def main() -> None:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)
-    payload = make_payload("dblp", args.query, args.round, papers)
+    payload = make_payload(
+        "dblp", args.query,
+        resolve_search_round(args.state, "dblp", args.round),
+        papers,
+    )
     emit(payload, args.output, args.state, meta=cache_meta)
 
 

@@ -18,8 +18,8 @@ import httpx
 
 from _common import (
     USER_AGENT, UpstreamError, emit, err, make_paper, make_payload,
-    maybe_emit_schema, record_search_failure, set_command_meta,
-    with_search_cache,
+    maybe_emit_schema, record_search_failure, resolve_search_round,
+    set_command_meta, with_search_cache,
 )
 
 API = "https://api.crossref.org/works"
@@ -109,7 +109,10 @@ def main() -> None:
                    help="Polite pool email (env: SCHOLAR_MAILTO)")
     p.add_argument("--year-from", type=int)
     p.add_argument("--year-to", type=int)
-    p.add_argument("--round", type=int, default=1)
+    p.add_argument("--round", type=int, default=None,
+                   help="Search round (used by saturation tracking). "
+                        "Default: auto-detect from --state — if the source "
+                        "has prior queries, use max(round)+1; otherwise 1.")
     p.add_argument("--output")
     p.add_argument("--state",
                    default=os.environ.get("SCHOLAR_STATE_PATH"),
@@ -134,7 +137,11 @@ def main() -> None:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)
-    payload = make_payload("crossref", args.query, args.round, papers)
+    payload = make_payload(
+        "crossref", args.query,
+        resolve_search_round(args.state, "crossref", args.round),
+        papers,
+    )
     emit(payload, args.output, args.state, meta=cache_meta)
 
 
