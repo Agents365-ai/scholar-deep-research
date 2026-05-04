@@ -2,87 +2,76 @@
 
 [中文文档](README_CN.md) &middot; 🌐 **Website:** [agents365-ai.github.io/scholar-deep-research](https://agents365-ai.github.io/scholar-deep-research/)
 
-An 8-phase (Phase 0..7), script-driven academic research workflow that turns a research question into a structured, cited report. Multi-source federation across OpenAlex, arXiv, Crossref, and PubMed with deduplication, transparent ranking, citation chasing, and a mandatory self-critique pass.
+An 8-phase (Phase 0..7), script-driven academic research workflow that turns a research question into a structured, cited report. Multi-source federation across 6 databases, mandatory self-critique, parallel deep-read agent fan-out.
 
-## What it does
+## Why this exists
 
-- **End-to-end research** — from question decomposition (Phase 0) to a finished report with bibliography (Phase 7), with 7 enforced phase-transition gates in between
-- **Agent-native CLI** — structured JSON envelopes with `request_id` / `latency_ms` / `cli_version` on every response; `--idempotency-key` on every mutating command; `--dry-run` previews; destructive operations (`init --force`) gated behind a paired `--dangerous` acknowledgement; gate failures carry a `next: [commands]` hint so agents recover without a discovery round-trip
-- **Parallel deep-read fan-out (Phase 3)** — selected papers split into `deep` / `skim` / `defer` tiers via deterministic triage. Deep tier dispatched in parallel waves of 8–10 agents, each reading one PDF in an isolated context bubble and writing structured evidence back through the exclusive-locked CLI. Skim tier auto-fills an abstract-derived evidence stub — no agent fan-out needed. Tunable via `--deep-ratio` / `--skim-ratio`; defaults shave roughly 50% off Phase 3 cost without losing coverage
-- **PDF prefetch ahead of fan-out** — optional `prefetch_pdfs.py` step at the close of Phase 2 pulls every deep-tier PDF into a stable cache (via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) with Unpaywall fallback) using `ThreadPoolExecutor` concurrency. Phase 3 agents then read a local file path instead of running their own download, and OA-chain failures surface as structured `pdf_status` records on the paper *before* dispatch — so a wave never starts only to discover half the PDFs are paywalled
-- **4 federated sources** — OpenAlex (primary, free, 240M+ works), arXiv (preprints), Crossref (DOI metadata), PubMed (biomedical)
-- **Transparent ranking** — papers are scored with a published formula (`α·relevance + β·citations + γ·recency + δ·venue_prior`), components written into state
-- **Deduplication across sources** — DOI-first, then title-similarity merge; one paper, one record
-- **Citation chasing (snowball)** — forward + backward graph expansion via OpenAlex
-- **Persistent state file** — `research_state.json` tracks every query, paper, decision, and phase. Research is resumable and auditable
-- **Three-axis saturation stop signal** — discovery ends only when *all* of paper-novelty (<20%), author-novelty (<25%), and venue-novelty (<30%) fall below threshold per source. Catches the failure mode where a query keeps surfacing different papers from the same lab or venue while exploration has actually stalled. Sources that don't report venues (e.g. arXiv) drop the venue axis cleanly via vacuous truth
-- **Phase 1 budget envelope** — env-var-set caps on Phase 1 ingest (`SCHOLAR_PHASE1_MAX_ROUNDS` default 5, `SCHOLAR_PHASE1_MAX_REQUESTS_PER_SOURCE` default 20) prevent runaway agent loops. Trust boundary: agents cannot raise their own ceiling — a confused loop hits the cap and gets a structured `phase1_budget_exhausted` error rather than silently consuming the rest of your token budget. Caps lift automatically once the workflow advances past Phase 1, so Phase 4 citation chase is unaffected
-- **5 report archetypes** — `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background`, picked from user intent
-- **Mandatory self-critique** — Phase 6 runs a 14-point adversarial checklist; findings go in the report appendix
-- **Citation rigor** — every claim in the body carries a `[^id]` anchor; unanchored claims fail the gate
-- **BibTeX / CSL-JSON / RIS export** — the bibliography is generated from state, not retyped
-- **PDF text extraction** — `pypdf`-based, with scanned-PDF detection. `--doi` mode resolves papers via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) (5-source OA chain) or Unpaywall fallback
-- **MCP enrichment, not dependency** — uses Semantic Scholar (asta) and Brave Search MCP tools when available, but the workflow is fully functional without them
-- Triggers proactively when a user question requires academic grounding
+Every script under `scripts/` is pure data — search, dedupe, rank, citation-chase, bibliography export. **Zero LLM calls inside the pipeline.** The host LLM is the orchestrator: it reads `SKILL.md`, calls the CLI tools, decides what to do next based on JSON envelopes coming back. That separation buys three properties that LLM-in-the-loop pipelines can't have:
 
-## Multi-Platform Support
+- **Reproducible** — same state → same output, no model nondeterminism.
+- **Auditable** — every mutation flows through one `research_state.py` boundary.
+- **Testable** — the 148-test smoke suite at `scripts/tests/run.py` runs in ~4 s with no API keys, no network, no model.
 
-Works with all major AI coding agents that support the [Agent Skills](https://agentskills.io) format:
+MCP tools and the host LLM enrich the agent's decisions; they never sit on the critical path.
 
-| Platform | Status | Details |
-|----------|--------|---------|
-| **[Claude Code](https://claude.ai/code)** | ✅ Full support | Native SKILL.md format |
-| **[OpenCode](https://opencode.ai/)** | ✅ Full support | Reads from `~/.config/opencode/skills/`, `.opencode/skills/`, and (cross-compat) `~/.claude/skills/` and `~/.agents/skills/` |
-| **[OpenClaw](https://openclaw.ai/) / [ClawHub](https://clawhub.ai/)** | ✅ Full support | `metadata.openclaw` namespace, dependency gating, `clawhub install` |
-| **Hermes Agent** | ✅ Full support | `metadata.hermes` namespace, category: research |
-| **[pi-mono](https://github.com/badlogic/pi-mono)** | ✅ Full support | `metadata.pimo` namespace |
-| **[OpenAI Codex](https://openai.com/index/introducing-codex/)** | ✅ Full support | `agents/openai.yaml` sidecar with capabilities and prerequisites |
-| **[SkillsMP](https://skillsmp.com/)** | ✅ Indexable | GitHub topics configured |
+## What a run looks like
 
-## Comparison
+Just describe what you want:
 
-### vs No Skill (native agent)
+```
+Run a deep research report on CRISPR base editing for Duchenne muscular dystrophy.
+```
 
-| Capability | Native agent | This skill |
-|------------|--------------|------------|
-| Search a single source | Yes (often Google Scholar via tool) | Yes — 4 sources federated |
-| Multi-round search with saturation gate | No — one shot | Yes — explicit `saturation` check |
-| Cross-source deduplication | No | Yes — DOI-first, title-similarity fallback |
-| Transparent ranking formula | No — opaque | Yes — formula printed, components in state |
-| Forward/backward citation chase | No | Yes — OpenAlex graph expansion |
-| Resumable state | No — stateless per turn | Yes — `research_state.json` |
-| Choice of report archetype | No — generic outline | Yes — 5 archetypes selected from intent |
-| Self-critique pass | No | Yes — mandatory 14-point checklist (Phase 6) |
-| Citation anchors enforced | No — claims float | Yes — every claim needs `[^id]` |
-| BibTeX / CSL-JSON / RIS export | No | Yes — generated from state |
-| PDF text extraction | Sometimes | Yes — pypdf with scanned-PDF detection |
-| Confirmation-bias backstop | No | Yes — explicit critique search for top-cited papers |
-| Parallel deep-read fan-out | No — sequential per paper | Yes — agent dispatch in waves of 8–10 + tier-aware triage |
-| MCP graceful degradation | N/A | Yes — scripts work even when MCP times out |
+The skill walks the 8 phases automatically:
 
-### vs Other research skills
+```
+[Phase 0] Restating: "What is the current state of CRISPR base editing as a
+          therapeutic for Duchenne muscular dystrophy?"
+          Archetype: literature_review
+          → research_state.json initialized
 
-| Feature | This skill | Generic "literature-review" prompts | Browser-driven scrapers |
-|---------|------------|-------------------------------------|-------------------------|
-| **Approach** | Scripts + SKILL.md | Pure prompt | Headless browser automation |
-| **Determinism** | ✅ Same input → same papers | ❌ Vibes-based search | 🟡 Brittle to UI changes |
-| **API key required** | ❌ None for OpenAlex/arXiv/Crossref | N/A | Often yes |
-| **Rate-limit aware** | ✅ Polite-pool email opt-in | ❌ | 🟡 |
-| **Resumable** | ✅ State file | ❌ | ❌ |
-| **Citation chasing** | ✅ via OpenAlex graph | 🟡 ad hoc | ❌ |
-| **Cross-source dedup** | ✅ Deterministic | ❌ | ❌ |
-| **Self-critique gate** | ✅ Mandatory | ❌ | ❌ |
-| **Archetype templates** | ✅ 5 | ❌ | ❌ |
+[Phase 1] OpenAlex + PubMed + arXiv + Crossref across 3 clusters...
+          Round 1: 187 hits, 142 unique. Round 2: 94 hits, 31 new.
+          Saturation: paper=11%, author=18%, venue=14% → SATURATED
 
-### Key advantages
+[Phase 2] Ranking with literature-review weights...
+          Top 20 selected. Score components written to state.
+          Triage: 10 deep + 10 skim (--deep-ratio 0.5).
+          Prefetch: 8/10 deep-tier PDFs cached, 2 paywalled (no OA).
 
-1. **Scripts-first, MCP-optional** — the workflow runs on stdlib HTTP. Semantic Scholar / Brave MCP tools are enrichment, not dependencies. When MCP times out, research keeps going.
-2. **Transparent ranking** — the formula is printed, the weights are in state, every paper's component scores are inspectable. The report's methodology appendix can cite its own ranking.
-3. **Persistent, auditable state** — every query, every dedupe, every selection lives in `research_state.json`. Research is resumable across sessions and reviewable by a third party.
-4. **Saturation as stop signal** — discovery ends when the data says it should, not when the model gets tired.
-5. **Self-critique is a phase, not a checkbox** — the 14-point Phase 6 checklist catches unanchored claims, venue/author skew, recency collapse, and untested high-citation papers. Findings go into the report appendix.
-6. **5 report archetypes** — the right structure for the right question (literature review vs systematic vs scoping vs comparative vs grant background).
-7. **Citation anchors enforced** — every claim in the body has `[^id]`; the export step catches unanchored prose.
+[Phase 3] Deep tier: 8 parallel agents dispatched (1 wave) — each reads
+          a local pdf_path, no per-agent download.
+          8 returned full evidence; 2 paywalled papers carry
+          evidence_unavailable from prefetch. Skim tier: 10
+          abstract-derived evidence stubs auto-filled.
+
+[Phase 4] Citation chasing on top 8 seeds, depth 1.
+          Added 24 candidates, 6 re-scored into top 20.
+
+[Phase 5] Themes: delivery, editing efficiency, off-target safety,
+          pre-clinical, clinical translation.
+          Tensions: AAV serotype optimality (3 papers disagree).
+
+[Phase 6] Self-critique flagged 2 single-source claims and a recency gap.
+          Ran focused search; added 4 papers.
+
+[Phase 7] reports/crispr-base-editing-dmd_20260411.md (84 refs)
+```
+
+Output: `reports/<slug>_<YYYYMMDD>.md` plus a matching `.bib`.
+
+## What you get
+
+- **Phase 0..7 cited-report pipeline** with 7 enforced phase-transition gates (G1..G7 in `scripts/_gates.py`)
+- **6 federated sources** — OpenAlex, arXiv, Crossref, PubMed, DBLP, bioRxiv. All free, none require an API key
+- **Cross-source deduplication** — DOI-first, title-similarity fallback; one paper, one record
+- **Three-axis saturation** — paper / author / venue novelty all must drop below threshold for Phase 1 to terminate. Catches the failure mode where queries keep surfacing different papers from the same lab while exploration has stalled
+- **Parallel deep-read fan-out (Phase 3)** — selected papers split into `deep` / `skim` / `defer` tiers. Deep tier dispatched in waves of 8–10 isolated-context agents, each reading one PDF; optional PDF prefetch ahead of dispatch surfaces paywalled papers as `evidence_unavailable` *before* a wave starts
+- **Transparent ranking** — published formula `α·relevance + β·citations + γ·recency + δ·venue_prior`, components written into state, every paper inspectable
+- **Mandatory Phase 6 self-critique** — 14-point adversarial checklist; findings ship in the report appendix
+- **Citation rigor** — every claim in the body carries a `[^id]` anchor; unanchored prose fails the gate
+- **5 archetype templates** — `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background`, picked from user intent
+- **BibTeX / CSL-JSON / RIS export** — bibliography generated from state, never retyped
 
 ## How it works
 
@@ -96,12 +85,6 @@ Phase 5  Synthesis    thematic clustering → tension map
 Phase 6  Self-critique  14-point adversarial checklist (mandatory)
 Phase 7  Report       render archetype template → export bibliography
 ```
-
-Each phase transition has an enforced gate (G1..G7 in `scripts/_gates.py`). The workflow advances one gate at a time via `python scripts/research_state.py --state <path> advance` — a call that runs the gate predicate and refuses with a structured `gate_not_met` envelope (listing failing checks *and* suggested next commands) when criteria aren't met. There is no way to skip a gate by setting `phase` directly.
-
-Every mutating command (`ingest`, `rank`, `dedupe`, `citation-chase`, plus the replay subcommands under `research_state.py`) accepts `--idempotency-key` — a retried call with the same key returns the original result without re-mutating state, so agent crash-recovery is contract-idempotent, not just naturally so. The state file itself is written under a sibling `.lock` file with atomic `os.replace`, so concurrent Phase 1 searches are race-free.
-
-### Pipeline diagram
 
 ```mermaid
 flowchart LR
@@ -125,13 +108,31 @@ flowchart LR
     class STATE state;
 ```
 
-Every phase reads and writes `research_state.json` — it's the single source of truth that makes the workflow resumable and auditable. Phase 6 (self-critique) can loop back to Phase 1 when it finds gaps; everything else is linear.
+Each phase transition runs through `python scripts/research_state.py advance`, which executes the gate predicate and refuses with a structured `gate_not_met` envelope (listing failing checks **and** suggested next commands) when criteria aren't met. There is no way to skip a gate by setting `phase` directly. Phase 6 (self-critique) can loop back to Phase 1 when it finds gaps; everything else is linear.
 
-### Design posture: deterministic spine, agentic skin
+Every mutating command (`ingest`, `rank`, `dedupe`, `citation-chase`) accepts `--idempotency-key` — a retried call with the same key returns the original result without re-mutating state, so agent crash-recovery is contract-idempotent. The state file itself is written under a sibling `.lock` file with atomic `os.replace`, so concurrent Phase 1 searches are race-free.
 
-Every script under `scripts/` is pure data — search, dedupe, rank, citation-chase, bibliography export. **Zero LLM calls inside the pipeline.** The host LLM is the orchestrator: it reads `SKILL.md`, calls the CLI tools, decides what to do next based on JSON envelopes coming back. This separation buys three properties that LLM-in-the-loop pipelines can't have: **reproducibility** (same state → same output, no model nondeterminism), **auditability** (every mutation flows through one `research_state.py` boundary), and **testability** (the 148-test smoke suite at `scripts/tests/run.py` runs in ~4 s with no API keys, no network, no model). MCP tools and the host LLM enrich the agent's decisions; they never sit on the critical path.
+## Comparison: with vs without this skill
 
-## Prerequisites
+| Capability | Native agent | This skill |
+|------------|--------------|------------|
+| Multi-source federated search | One source per turn | 6 sources, federated |
+| Multi-round search with saturation gate | One-shot | Three-axis saturation check |
+| Cross-source deduplication | None | DOI-first, title-similarity fallback |
+| Transparent ranking formula | Opaque | Formula + per-paper component scores in state |
+| Forward/backward citation chase | None | OpenAlex graph expansion |
+| Resumable state | Stateless per turn | `research_state.json` |
+| Choice of report archetype | Generic outline | 5 archetypes selected from intent |
+| Self-critique pass | None | Mandatory 14-point checklist (Phase 6) |
+| Citation anchors enforced | Claims float | Every claim needs `[^id]`; gate rejects unanchored |
+| BibTeX / CSL-JSON / RIS export | None | Generated from state |
+| PDF text extraction | Sometimes | `pypdf` with scanned-PDF detection + OA-chain DOI resolution |
+| Parallel deep-read fan-out | Sequential | Wave-based agent dispatch + tier-aware triage |
+| MCP graceful degradation | N/A | Scripts work even when MCP times out |
+
+## Quick start
+
+### Prerequisites
 
 - **Python ≥ 3.9**
 - **Install dependencies:**
@@ -140,99 +141,93 @@ Every script under `scripts/` is pure data — search, dedupe, rank, citation-ch
   ```
   Pulls in `httpx` (HTTP client) and `pypdf` (PDF text extraction).
 
-No API keys are required. For higher OpenAlex / Crossref / PubMed rate limits, pass `--email <you@host>` (polite pool) or `--api-key` (NCBI). All scripts work without these.
+No API keys required. For higher OpenAlex / Crossref / PubMed rate limits, pass `--email <you@host>` (polite pool) or `--api-key` (NCBI). All scripts work without these.
 
-## Skill Installation
+### Install — let your agent do it
 
-### 🪄 Quickest — just ask your agent
-
-The simplest install is to let your coding agent do it. In **Claude Code**, **OpenAI Codex**, **OpenCode**, **OpenClaw**, **Hermes Agent**, or **pi-mono**, paste this:
+The simplest install is to let your coding agent do it. In **Claude Code**, **OpenAI Codex**, **OpenCode**, **OpenClaw**, **Hermes Agent**, or **pi-mono**, paste:
 
 ```
 Install https://github.com/Agents365-ai/scholar-deep-research for me, then run pip install -r requirements.txt inside it.
 ```
 
-The agent will:
-1. Recognize this as an Agent Skills repo (`SKILL.md` at the root)
-2. `git clone` it into the correct skills directory for whichever platform is hosting it (e.g. `~/.claude/skills/`, `~/.config/opencode/skills/`, `~/.openclaw/skills/`, `~/.hermes/skills/research/`, `~/.pimo/skills/`, or `~/.agents/skills/`)
-3. Install Python dependencies (`httpx`, `pypdf`)
-4. Confirm the skill is loaded and ready
+The agent recognizes Agent Skills repos (`SKILL.md` at root), `git clone`s into the right skills directory for whichever platform is hosting it, installs Python deps, and confirms the skill is loaded. Then ask for a research report — the skill triggers automatically.
 
-After that, ask for a research report and the skill triggers automatically. No manual `git clone` needed.
+### Installation paths
 
-If you prefer to do it by hand, the per-platform commands are below.
+| Platform | Global path | Project path |
+|----------|-------------|--------------|
+| Claude Code | `~/.claude/skills/scholar-deep-research/` | `.claude/skills/scholar-deep-research/` |
+| OpenCode | `~/.config/opencode/skills/scholar-deep-research/` | `.opencode/skills/scholar-deep-research/` |
+| OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
+| Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | Via `external_dirs` config |
+| pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
+| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
+| SkillsMP | `skills install scholar-deep-research` | N/A |
 
-### Claude Code
+<details>
+<summary>Manual per-platform commands</summary>
 
+**Claude Code**
 ```bash
-# Global install (available in all projects)
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.claude/skills/scholar-deep-research
-
-# Project-level install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git .claude/skills/scholar-deep-research
+# or project-level: .claude/skills/scholar-deep-research
 ```
 
-### OpenCode
-
+**OpenCode**
 ```bash
-# Global install
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.config/opencode/skills/scholar-deep-research
-
-# Project-level install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git .opencode/skills/scholar-deep-research
+# or project-level: .opencode/skills/scholar-deep-research
 ```
 
-### OpenClaw / ClawHub
-
+**OpenClaw / ClawHub**
 ```bash
-# Via ClawHub
 clawhub install scholar-deep-research
-
-# Manual install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.openclaw/skills/scholar-deep-research
-
-# Project-level install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git skills/scholar-deep-research
+# or manual: git clone … ~/.openclaw/skills/scholar-deep-research
 ```
 
-### Hermes Agent
-
+**Hermes Agent**
 ```bash
-# Install under research category
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.hermes/skills/research/scholar-deep-research
 ```
-
 Or add an external directory in `~/.hermes/config.yaml`:
-
 ```yaml
 skills:
   external_dirs:
     - ~/myskills/scholar-deep-research
 ```
 
-### pi-mono
-
+**pi-mono**
 ```bash
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
 ```
 
-### OpenAI Codex
-
+**OpenAI Codex**
 ```bash
-# User-level install
 git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
-
-# Project-level install
-git clone https://github.com/Agents365-ai/scholar-deep-research.git .agents/skills/scholar-deep-research
+# or project-level: .agents/skills/scholar-deep-research
 ```
 
-### SkillsMP
-
+**SkillsMP**
 ```bash
 skills install scholar-deep-research
 ```
 
-### Updating
+</details>
+
+## Multi-platform support
+
+| Platform | Status | Details |
+|----------|--------|---------|
+| **[Claude Code](https://claude.ai/code)** | ✅ Full support | Native SKILL.md format |
+| **[OpenCode](https://opencode.ai/)** | ✅ Full support | Reads from `~/.config/opencode/skills/`, `.opencode/skills/`, and (cross-compat) `~/.claude/skills/` and `~/.agents/skills/` |
+| **[OpenClaw](https://openclaw.ai/) / [ClawHub](https://clawhub.ai/)** | ✅ Full support | `metadata.openclaw` namespace, dependency gating, `clawhub install` |
+| **Hermes Agent** | ✅ Full support | `metadata.hermes` namespace, category: research |
+| **[pi-mono](https://github.com/badlogic/pi-mono)** | ✅ Full support | `metadata.pimo` namespace |
+| **[OpenAI Codex](https://openai.com/index/introducing-codex/)** | ✅ Full support | `agents/openai.yaml` sidecar with capabilities and prerequisites |
+| **[SkillsMP](https://skillsmp.com/)** | ✅ Indexable | GitHub topics configured |
+
+## Updating
 
 The skill **auto-updates on invocation.** Every time a host LLM activates `scholar-deep-research` for a new research task, Phase 0 Step 0 runs `python scripts/check_update.py`, which:
 
@@ -262,81 +257,14 @@ pip install -r requirements.txt              # only if you see the deps-changed 
 
 Users installed through a package manager (ClawHub, SkillsMP, Hermes registry) should use that manager's own update command instead; `check_update.py` will detect the non-git install and stay out of its way.
 
-### Installation paths summary
+## Reference
 
-| Platform | Global path | Project path |
-|----------|-------------|--------------|
-| Claude Code | `~/.claude/skills/scholar-deep-research/` | `.claude/skills/scholar-deep-research/` |
-| OpenCode | `~/.config/opencode/skills/scholar-deep-research/` | `.opencode/skills/scholar-deep-research/` |
-| OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
-| Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | Via `external_dirs` config |
-| pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
-| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
-| SkillsMP | N/A (installed via CLI) | N/A |
-
-## Usage
-
-Just describe what you want:
-
-```
-Run a deep research report on CRISPR base editing for Duchenne muscular dystrophy.
-```
-
-The agent will:
-1. Restate the question and pick an archetype
-2. Run multi-source searches with saturation tracking
-3. Rank, dedupe, and select the top-N
-4. Deep-read PDFs and extract evidence
-5. Chase citations (forward + backward)
-6. Cluster themes and map tensions
-7. Run a self-critique pass
-8. Render the chosen archetype with bibliography
-
-The output lives at `reports/<slug>_<YYYYMMDD>.md` plus a `.bib` bibliography.
-
-## Example phases
-
-```
-[Phase 0] Restating: "What is the current state of CRISPR base editing as a
-          therapeutic for Duchenne muscular dystrophy?"
-          Archetype: literature_review
-          → research_state.json initialized
-
-[Phase 1] OpenAlex + PubMed + arXiv + Crossref across 3 clusters...
-          Round 1: 187 hits, 142 unique. Round 2: 94 hits, 31 new.
-          Saturation: new=11%, max_new_citations=23 → SATURATED
-
-[Phase 2] Ranking with literature-review weights...
-          Top 20 selected. Score components written to state.
-          Triage: 10 deep + 10 skim (--deep-ratio 0.5).
-          Prefetch: 8/10 deep-tier PDFs cached, 2 paywalled (no OA).
-
-[Phase 3] Deep tier: 8 parallel agents dispatched (1 wave) — each reads
-          a local pdf_path, no per-agent download.
-          8 returned full evidence; 2 paywalled papers carry
-          evidence_unavailable from prefetch. Skim tier: 10
-          abstract-derived evidence stubs auto-filled.
-
-[Phase 4] Citation chasing on top 8 seeds, depth 1.
-          Added 24 candidates, 6 re-scored into top 20.
-
-[Phase 5] Themes: delivery, editing efficiency, off-target safety,
-          pre-clinical, clinical translation.
-          Tensions: AAV serotype optimality (3 papers disagree).
-
-[Phase 6] Self-critique flagged 2 single-source claims and a recency gap.
-          Ran focused search; added 4 papers.
-
-[Phase 7] reports/crispr-base-editing-dmd_20260411.md (84 refs)
-```
-
-## Files
+### Files
 
 ```
 scholar-deep-research/
 ├── SKILL.md                       # Skill instructions (the only required file)
-├── README.md                      # This file
-├── README_CN.md                   # 中文文档
+├── README.md / README_CN.md       # This file / 中文文档
 ├── requirements.txt               # httpx, pypdf
 ├── agents/
 │   └── openai.yaml                # OpenAI Codex sidecar (interface, capabilities, prereqs)
@@ -363,7 +291,7 @@ scholar-deep-research/
 │   ├── export_bibtex.py           # BibTeX / CSL-JSON / RIS
 │   ├── check_update.py            # 24h-throttled fast-forward of the skill itself
 │   └── tests/                     # 148-test smoke suite (stdlib only, no network)
-├── references/
+├── references/                    # Progressive-disclosure resources (loaded on demand)
 │   ├── search_strategies.md       # Boolean, PICO, snowballing, saturation
 │   ├── source_selection.md        # Which database for which question
 │   ├── quality_assessment.md      # CRAAP, tier, retraction, preprints
@@ -372,7 +300,7 @@ scholar-deep-research/
 │   └── agent_prompts/
 │       └── phase3_deep_read.md    # Per-paper prompt for parallel agent fan-out
 └── assets/
-    ├── templates/
+    ├── templates/                 # Per-archetype report skeletons
     │   ├── literature_review.md
     │   ├── systematic_review.md
     │   ├── scoping_review.md
@@ -382,16 +310,16 @@ scholar-deep-research/
         └── self_critique.md       # 14-point Phase 6 checklist
 ```
 
-> **Note:** Only `SKILL.md` and `scripts/` are required for the skill to work. `references/` and `assets/` are progressive-disclosure resources the model loads on demand.
+> Only `SKILL.md` and `scripts/` are required for the skill to work. `references/` and `assets/` are progressive-disclosure resources the model loads on demand.
 
-## Known Limitations
+### Known Limitations
 
 - **No Google Scholar / Web of Science / Scopus** — these have no public API or require institutional access. Mention in report appendix as "not consulted" if it matters.
 - **Scanned PDFs** — `extract_pdf.py` detects them but doesn't OCR. Use a separate OCR step if needed.
 - **DOI resolution requires open access** — `--doi` mode only finds legally open-access PDFs (via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) or Unpaywall). Paywalled papers fall back to abstract-only.
 - **arXiv has no citation counts** — arXiv-only papers get `citations=null` and a 0 contribution from the citation component of the rank score.
 - **PubMed full abstracts** — fetched on demand only (`--with-abstracts`); the default round-trip uses esummary for speed.
-- **English-language bias** — all four sources index non-English work but search quality varies. Note in the report's limitations if the topic has substantial non-English literature.
+- **English-language bias** — all sources index non-English work but search quality varies. Note in the report's limitations if the topic has substantial non-English literature.
 - **Ranking is bag-of-words for relevance** — for semantic re-ranking, plug an embedding model and write the result back into `state.papers[*].score_components.relevance`. The pipeline is designed for that override.
 
 ## License
