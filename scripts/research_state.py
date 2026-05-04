@@ -1207,7 +1207,91 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def cmd_evidence(args: argparse.Namespace) -> None:
-    """Attach evidence (extracted reading) to a paper."""
+    """Attach evidence (extracted reading) to a paper.
+
+    Two mutually-exclusive input modes:
+
+      - **structured**: `--method "..." --findings "a" "b" --limitations "..."
+        --relevance "..."`. The original path; works fine for short single
+        invocations.
+
+      - **JSON**: `--from-json <path>` or `--from-json -` (stdin). Payload
+        shape: `{"method": str, "findings": [str], "limitations": str,
+        "relevance": str, "depth": "full"|"shallow"}`. Built for parallel
+        agents that compose evidence in Python — skipping the multi-quote
+        shell escape dance is the entire reason this path exists. The
+        Phase 3 sub-agent fan-out hits ~10x the JSON path each session.
+
+    Mixing the two modes is rejected (`inconsistent_input`) so the
+    precedence rule cannot become a silent footgun.
+    """
+    if args.from_json is not None:
+        passed_structured = any(getattr(args, f) is not None for f in
+                                ("method", "findings", "limitations",
+                                 "relevance"))
+        if passed_structured:
+            err("inconsistent_input",
+                "--from-json is mutually exclusive with --method / "
+                "--findings / --limitations / --relevance. Pick one mode.",
+                retryable=False, exit_code=EXIT_VALIDATION)
+        try:
+            if args.from_json == "-":
+                raw = sys.stdin.read()
+            else:
+                raw = Path(args.from_json).read_text()
+        except (FileNotFoundError, OSError) as e:
+            err("from_json_unreadable",
+                f"--from-json source '{args.from_json}' could not be read: {e}",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.from_json)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            err("invalid_json",
+                f"--from-json payload is not valid JSON: {e}",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.from_json)
+        if not isinstance(payload, dict):
+            err("invalid_json",
+                "--from-json payload must be a JSON object, not "
+                f"{type(payload).__name__}.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.from_json)
+        method = payload.get("method")
+        # JSON's depth wins over the argparse default; if absent, fall
+        # back to the explicit --depth flag (which itself defaults to
+        # "full" via argparse).
+        depth = payload.get("depth", args.depth)
+        findings = payload.get("findings") or []
+        limitations = payload.get("limitations") or ""
+        relevance = payload.get("relevance") or ""
+    else:
+        if not args.method:
+            err("missing_field",
+                "--method is required (or use --from-json to supply via JSON).",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                field="method")
+        method = args.method
+        depth = args.depth
+        findings = args.findings or []
+        limitations = args.limitations or ""
+        relevance = args.relevance or ""
+
+    if not isinstance(method, str) or not method.strip():
+        err("missing_field",
+            "evidence.method must be a non-empty string.",
+            retryable=False, exit_code=EXIT_VALIDATION, field="method")
+    if not isinstance(findings, list) or not all(
+            isinstance(f, str) for f in findings):
+        err("invalid_field",
+            "evidence.findings must be a list of strings.",
+            retryable=False, exit_code=EXIT_VALIDATION, field="findings")
+    if depth not in ("full", "shallow"):
+        err("invalid_field",
+            f"evidence.depth must be 'full' or 'shallow', not {depth!r}.",
+            retryable=False, exit_code=EXIT_VALIDATION, field="depth",
+            allowed=["full", "shallow"])
+
     def mutator(state: dict[str, Any]) -> dict[str, Any]:
         if args.id not in state["papers"]:
             err("unknown_paper_id",
@@ -1216,16 +1300,16 @@ def cmd_evidence(args: argparse.Namespace) -> None:
                 id=args.id)
         paper = state["papers"][args.id]
         paper["evidence"] = {
-            "method": args.method,
-            "findings": args.findings or [],
-            "limitations": args.limitations or "",
-            "relevance": args.relevance or "",
+            "method": method,
+            "findings": findings,
+            "limitations": limitations,
+            "relevance": relevance,
         }
-        paper["depth"] = args.depth
+        paper["depth"] = depth
         return state
 
     _locked_rmw(Path(args.state), mutator)
-    ok({"id": args.id, "depth": args.depth})
+    ok({"id": args.id, "depth": depth})
 
 
 def cmd_theme(args: argparse.Namespace) -> None:
@@ -1609,11 +1693,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("evidence", help="Attach evidence to a paper")
     s.add_argument("--id", required=True)
-    s.add_argument("--method", required=True)
+    s.add_argument("--method",
+                   help="Required unless --from-json is given.")
     s.add_argument("--findings", nargs="*")
     s.add_argument("--limitations")
     s.add_argument("--relevance")
     s.add_argument("--depth", choices=["full", "shallow"], default="full")
+    s.add_argument(
+        "--from-json",
+        help="Read {method,findings,limitations,relevance[,depth]} from "
+             "this JSON file. Use '-' for stdin. Mutually exclusive with "
+             "--method/--findings/--limitations/--relevance.")
+    set_command_meta(s, since="0.10.0", tier="write")
     s.set_defaults(func=cmd_evidence)
 
     # Replay/audit subcommands: apply a pre-computed patch from a JSON file.
