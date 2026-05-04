@@ -344,6 +344,11 @@ MIT
       <br>
       <b>Buy Me a Coffee</b>
     </td>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/Agents365-ai/images_payment/main/awarding/award.gif" width="180" alt="给个鼓励">
+      <br>
+      <b>给个鼓励</b>
+    </td>
   </tr>
 </table>
 
