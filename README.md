@@ -129,7 +129,7 @@ Every phase reads and writes `research_state.json` — it's the single source of
 
 ### Design posture: deterministic spine, agentic skin
 
-Every script under `scripts/` is pure data — search, dedupe, rank, citation-chase, bibliography export. **Zero LLM calls inside the pipeline.** The host LLM is the orchestrator: it reads `SKILL.md`, calls the CLI tools, decides what to do next based on JSON envelopes coming back. This separation buys three properties that LLM-in-the-loop pipelines can't have: **reproducibility** (same state → same output, no model nondeterminism), **auditability** (every mutation flows through one `research_state.py` boundary), and **testability** (the 124-test smoke suite at `scripts/tests/run.py` runs in ~4 s with no API keys, no network, no model). MCP tools and the host LLM enrich the agent's decisions; they never sit on the critical path.
+Every script under `scripts/` is pure data — search, dedupe, rank, citation-chase, bibliography export. **Zero LLM calls inside the pipeline.** The host LLM is the orchestrator: it reads `SKILL.md`, calls the CLI tools, decides what to do next based on JSON envelopes coming back. This separation buys three properties that LLM-in-the-loop pipelines can't have: **reproducibility** (same state → same output, no model nondeterminism), **auditability** (every mutation flows through one `research_state.py` boundary), and **testability** (the 148-test smoke suite at `scripts/tests/run.py` runs in ~4 s with no API keys, no network, no model). MCP tools and the host LLM enrich the agent's decisions; they never sit on the critical path.
 
 ## Prerequisites
 
@@ -242,7 +242,7 @@ The skill **auto-updates on invocation.** Every time a host LLM activates `schol
 4. Detects `requirements.txt` drift and surfaces a hint; **pip install is never run automatically** (the skill doesn't know which Python / venv is yours)
 5. Never fails the workflow — offline, no remote, or package-manager install all degrade silently to `check_failed` / `not_a_git_repo` and research proceeds with the current version
 
-When an update is applied you'll see a single line in the chat, e.g. `[Skill updated: abc123 → def456 (3 commits). Continuing with new version.]`. The `from` / `to` short SHAs let you run `git log abc123..def456` in the skill directory to see exactly what changed.
+When an update is applied you'll see a single line in the chat, e.g. `[Skill updated: abc123 → def456 (3 commits). Continuing with new version.]`. The success envelope also carries a `what_changed` field listing the top 5 `feat:` / `fix:` commit subjects from the new range, so the host LLM can summarize "what's new" without you having to run `git log` yourself.
 
 **Pinning a version.** If you want to hold a specific commit — for a paper submission, a reproducibility run, or while a downstream script is being validated — set:
 
@@ -341,20 +341,28 @@ scholar-deep-research/
 ├── agents/
 │   └── openai.yaml                # OpenAI Codex sidecar (interface, capabilities, prereqs)
 ├── scripts/
-│   ├── _common.py                 # Shared paper schema + emit helper
+│   ├── _common.py                 # Envelope, schema, idempotency cache, search-result TTL cache
+│   ├── _gates.py                  # G1..G7 gate predicates for phase advance
+│   ├── _locking.py                # Atomic state writer (single-writer, exclusive lock)
 │   ├── _pdf_fetch.py              # Shared PDF-fetch helper (paper-fetch + Unpaywall fallback)
-│   ├── research_state.py          # Central state file management
+│   ├── research_state.py          # Central state file management (init/ingest/advance/query/...)
 │   ├── search_openalex.py         # OpenAlex (primary)
 │   ├── search_arxiv.py            # arXiv preprints
 │   ├── search_crossref.py         # Crossref REST
 │   ├── search_pubmed.py           # NCBI E-utilities
+│   ├── search_dblp.py             # DBLP — CS bibliography gold standard (no abstracts/citations)
+│   ├── search_biorxiv.py          # bioRxiv/medRxiv preprints (via Europe PMC)
+│   ├── search_exa.py              # Exa AI-powered search (optional, key-gated)
 │   ├── dedupe_papers.py           # Cross-source deduplication
 │   ├── rank_papers.py             # Transparent scoring
+│   ├── resolve_id.py              # Read-only paper-ID canonicalizer (DOI/OpenAlex/arXiv/PMID)
 │   ├── skim_papers.py             # Phase-3 tier triage (deep/skim/defer)
 │   ├── prefetch_pdfs.py           # Pull deep-tier PDFs ahead of agent fan-out (concurrent)
 │   ├── build_citation_graph.py    # Forward + backward snowball
 │   ├── extract_pdf.py             # PDF extraction with DOI resolution (paper-fetch / Unpaywall)
-│   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
+│   ├── export_bibtex.py           # BibTeX / CSL-JSON / RIS
+│   ├── check_update.py            # 24h-throttled fast-forward of the skill itself
+│   └── tests/                     # 148-test smoke suite (stdlib only, no network)
 ├── references/
 │   ├── search_strategies.md       # Boolean, PICO, snowballing, saturation
 │   ├── source_selection.md        # Which database for which question

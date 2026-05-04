@@ -129,7 +129,7 @@ flowchart LR
 
 ### 设计立场：确定性骨架，智能体外皮
 
-`scripts/` 下的每个脚本都是纯数据处理——检索、去重、排序、追引、参考文献导出。**流水线内部不含任何 LLM 调用**。宿主 LLM 是编排者：它读 `SKILL.md`、调用 CLI 工具、根据返回的 JSON 信封决定下一步。这种分工换来三个 LLM-in-the-loop 流水线无法兼得的属性：**可复现**（相同状态 → 相同输出，无模型不确定性）、**可审计**（所有状态变更都经过 `research_state.py` 这一道边界）、**可测试**（`scripts/tests/run.py` 的 124 项冒烟测试约 4 秒跑完，无需 API key、无需网络、无需模型）。MCP 工具和宿主 LLM 用于丰富 agent 的判断，但永远不在关键路径上。
+`scripts/` 下的每个脚本都是纯数据处理——检索、去重、排序、追引、参考文献导出。**流水线内部不含任何 LLM 调用**。宿主 LLM 是编排者：它读 `SKILL.md`、调用 CLI 工具、根据返回的 JSON 信封决定下一步。这种分工换来三个 LLM-in-the-loop 流水线无法兼得的属性：**可复现**（相同状态 → 相同输出，无模型不确定性）、**可审计**（所有状态变更都经过 `research_state.py` 这一道边界）、**可测试**（`scripts/tests/run.py` 的 148 项冒烟测试约 4 秒跑完，无需 API key、无需网络、无需模型）。MCP 工具和宿主 LLM 用于丰富 agent 的判断，但永远不在关键路径上。
 
 ## 前置条件
 
@@ -242,7 +242,7 @@ skills install scholar-deep-research
 4. 检测到 `requirements.txt` 有变化时只给出提示,**不会自动 `pip install`**(skill 不知道你用的是哪个 Python / venv)
 5. **永不阻断工作流**——离线、无远端、或包管理器安装都会静默降级到 `check_failed` / `not_a_git_repo`,研究照常继续
 
-升级生效时你只会看到一行信息,例如 `[Skill updated: abc123 → def456 (3 commits). Continuing with new version.]`。短 SHA 让你可以在 skill 目录里跑 `git log abc123..def456` 看改动。
+升级生效时你只会看到一行信息,例如 `[Skill updated: abc123 → def456 (3 commits). Continuing with new version.]`。成功信封里还带了一个 `what_changed` 字段,列出新 commit 区间内最多 5 条 `feat:` / `fix:` 提交标题——宿主 LLM 可以直接给你讲"这次升级带来了什么",不用再手动跑 `git log`。
 
 **固定版本**。如果你需要锁定一个特定 commit——投稿留存、复现实验、或下游脚本还没验证完新版本——设置:
 
@@ -338,20 +338,28 @@ scholar-deep-research/
 ├── agents/
 │   └── openai.yaml                # OpenAI Codex 侧车文件（接口、能力、前置条件）
 ├── scripts/
-│   ├── _common.py                 # 共享论文 schema 与输出 helper
+│   ├── _common.py                 # 信封、schema、幂等缓存、检索结果 TTL 缓存
+│   ├── _gates.py                  # G1..G7 阶段推进门控谓词
+│   ├── _locking.py                # 状态文件原子写入器（单写者，独占锁）
 │   ├── _pdf_fetch.py              # 共享 PDF 抓取 helper（paper-fetch + Unpaywall 兜底）
-│   ├── research_state.py          # 状态文件管理（核心）
+│   ├── research_state.py          # 状态文件管理（init/ingest/advance/query/...）
 │   ├── search_openalex.py         # OpenAlex（主源）
 │   ├── search_arxiv.py            # arXiv 预印本
 │   ├── search_crossref.py         # Crossref REST
 │   ├── search_pubmed.py           # NCBI E-utilities
+│   ├── search_dblp.py             # DBLP — 计算机科学权威书目（无摘要/无引用数）
+│   ├── search_biorxiv.py          # bioRxiv/medRxiv 预印本（经 Europe PMC 检索）
+│   ├── search_exa.py              # Exa AI 检索（可选，需 API key）
 │   ├── dedupe_papers.py           # 跨源去重
 │   ├── rank_papers.py             # 透明打分
+│   ├── resolve_id.py              # 只读论文 ID 规范化（DOI/OpenAlex/arXiv/PMID）
 │   ├── skim_papers.py             # Phase 3 分档 triage（deep / skim / defer）
 │   ├── prefetch_pdfs.py           # 派发前并发预取 deep 档 PDF
 │   ├── build_citation_graph.py    # 正向 + 反向滚雪球
 │   ├── extract_pdf.py             # PDF 提取 + DOI 解析（paper-fetch / Unpaywall）
-│   └── export_bibtex.py           # BibTeX / CSL-JSON / RIS
+│   ├── export_bibtex.py           # BibTeX / CSL-JSON / RIS
+│   ├── check_update.py            # 24 小时节流的 skill 自身快进升级
+│   └── tests/                     # 148 项冒烟测试套件（仅标准库，无网络）
 ├── references/
 │   ├── search_strategies.md       # 布尔、PICO、滚雪球、饱和度
 │   ├── source_selection.md        # 哪个数据库适合哪类问题
