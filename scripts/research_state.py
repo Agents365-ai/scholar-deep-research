@@ -1113,6 +1113,99 @@ def cmd_query(args: argparse.Namespace) -> None:
     ok(items, count=len(items), has_more=False)
 
 
+def cmd_status(args: argparse.Namespace) -> None:
+    """Compact "where am I, what's next" summary.
+
+    Returns a flat dict so agents can call this once at the top of a
+    session to learn the phase + counts + the next gate's pending
+    checks without chaining `query summary` + `saturation` +
+    `advance --check-only`. Read-only; never mutates state.
+
+    The `next_gate` block carries the result of evaluating the gate
+    for `current_phase + 1` against current state. `next_commands`
+    surfaces the same hint list that a failed `advance` would produce,
+    so an agent can read this envelope and act without a second call.
+    """
+    from _gates import GATES, next_hints_for
+
+    state = load_state(Path(args.state))
+
+    papers = state.get("papers") or {}
+    selected_ids = state.get("selected_ids") or []
+    selected = [papers[pid] for pid in selected_ids if pid in papers]
+
+    by_tier: dict[str, int] = {}
+    by_depth: dict[str, int] = {}
+    for p in selected:
+        tier = p.get("tier") or "untriaged"
+        by_tier[tier] = by_tier.get(tier, 0) + 1
+        depth = p.get("depth") or "missing"
+        by_depth[depth] = by_depth.get(depth, 0) + 1
+
+    queries = state.get("queries") or []
+    by_source: dict[str, int] = {}
+    for q in queries:
+        s = q.get("source") or "unknown"
+        by_source[s] = by_source.get(s, 0) + 1
+
+    crit = state.get("self_critique") or {}
+
+    current = state.get("phase", 0)
+    target = current + 1
+    next_gate_info: dict[str, Any] | None = None
+    next_hint_cmds: list[str] = []
+    if target in GATES:
+        gate_fn = GATES[target]
+        try:
+            if target == 2:
+                result = gate_fn(
+                    state, compute_saturation=compute_saturation)
+            else:
+                result = gate_fn(state)
+            failing = [c.name for c in result.checks if not c.ok]
+            next_gate_info = {
+                "target": target,
+                "met": result.met,
+                "failing_checks": failing,
+            }
+            if not result.met:
+                next_hint_cmds = next_hints_for(result.checks, args.state)
+        except Exception:
+            # Partial state can make gate compute raise (e.g. saturation
+            # before any query). Status must never throw — leave the
+            # block None so callers can still see the rest of the
+            # snapshot.
+            pass
+
+    ok({
+        "phase": current,
+        "archetype": state.get("archetype"),
+        "question": state.get("question"),
+        "papers": {
+            "total": len(papers),
+            "selected": len(selected_ids),
+            "by_tier": by_tier,
+            "by_depth": by_depth,
+        },
+        "queries": {
+            "total": len(queries),
+            "by_source": by_source,
+        },
+        "synthesis": {
+            "themes": len(state.get("themes") or []),
+            "tensions": len(state.get("tensions") or []),
+        },
+        "critique": {
+            "findings": len(crit.get("findings") or []),
+            "resolved": len(crit.get("resolved") or []),
+            "appendix_populated": bool(crit.get("appendix")),
+        },
+        "report_path": state.get("report_path"),
+        "next_gate": next_gate_info,
+        "next_commands": next_hint_cmds,
+    })
+
+
 def cmd_evidence(args: argparse.Namespace) -> None:
     """Attach evidence (extracted reading) to a paper."""
     def mutator(state: dict[str, Any]) -> dict[str, Any]:
@@ -1507,6 +1600,12 @@ def build_parser() -> argparse.ArgumentParser:
                                     "themes", "tensions", "critique",
                                     "diagnostics"])
     s.set_defaults(func=cmd_query)
+
+    s = sub.add_parser(
+        "status",
+        help='Compact "where am I, what\'s next" snapshot (read-only)')
+    set_command_meta(s, since="0.10.0", tier="read")
+    s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("evidence", help="Attach evidence to a paper")
     s.add_argument("--id", required=True)
