@@ -21,7 +21,7 @@ from typing import Any
 from _common import (
     USER_AGENT, UpstreamError, make_paper, make_payload, emit, err,
     maybe_emit_schema, reconstruct_inverted_abstract, record_search_failure,
-    set_command_meta, with_search_cache,
+    resolve_search_round, set_command_meta, with_search_cache,
 )
 
 API = "https://api.openalex.org/works"
@@ -131,8 +131,10 @@ def main() -> None:
                    help="Polite pool email (env: SCHOLAR_MAILTO)")
     p.add_argument("--year-from", type=int)
     p.add_argument("--year-to", type=int)
-    p.add_argument("--round", type=int, default=1,
-                   help="Search round (used by saturation tracking)")
+    p.add_argument("--round", type=int, default=None,
+                   help="Search round (used by saturation tracking). "
+                        "Default: auto-detect from --state — if the source "
+                        "has prior queries, use max(round)+1; otherwise 1.")
     p.add_argument("--output", help="Write payload JSON to this path")
     p.add_argument("--state",
                    default=os.environ.get("SCHOLAR_STATE_PATH"),
@@ -157,7 +159,11 @@ def main() -> None:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)
-    payload = make_payload("openalex", args.query, args.round, papers)
+    payload = make_payload(
+        "openalex", args.query,
+        resolve_search_round(args.state, "openalex", args.round),
+        papers,
+    )
     emit(payload, args.output, args.state, meta=cache_meta)
 
 

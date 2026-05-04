@@ -32,7 +32,7 @@ from typing import Any
 
 from _common import (
     EXIT_RUNTIME, USER_AGENT, UpstreamError, emit, err, make_paper,
-    make_payload, maybe_emit_schema, set_command_meta,
+    make_payload, maybe_emit_schema, resolve_search_round, set_command_meta,
 )
 
 INTEGRATION_ID = "scholar-deep-research"
@@ -264,8 +264,10 @@ def main() -> None:
         action="append",
         help="Forbid these substrings in results. Repeatable.",
     )
-    p.add_argument("--round", type=int, default=1,
-                   help="Search round (used by saturation tracking)")
+    p.add_argument("--round", type=int, default=None,
+                   help="Search round (used by saturation tracking). "
+                        "Default: auto-detect from --state — if the source "
+                        "has prior queries, use max(round)+1; otherwise 1.")
     p.add_argument("--output", help="Write payload JSON to this path")
     p.add_argument("--state",
                    default=os.environ.get("SCHOLAR_STATE_PATH"),
@@ -311,7 +313,11 @@ def main() -> None:
         err("upstream_error", e.message,
             retryable=e.retryable, exit_code=e.exit_code,
             source=e.source, status=e.status)
-    payload = make_payload("exa", args.query, args.round, papers)
+    payload = make_payload(
+        "exa", args.query,
+        resolve_search_round(args.state, "exa", args.round),
+        papers,
+    )
     emit(payload, args.output, args.state)
 
 
