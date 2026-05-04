@@ -249,15 +249,32 @@ Write findings to `research_state.json` under `self_critique` and fix blockers b
 
 ### Phase 7 — Report
 
-Render the chosen archetype template from `assets/templates/`, filling from state:
+Render an archetype scaffold from state, then fill the agent-prose
+slots and validate anchors:
 
 ```bash
+# Generate the scaffold — fills header, themes, tensions, methodology
+# appendix, self-critique appendix, and bibliography anchor index from
+# state. Leaves `<!-- AGENT: ... -->` placeholders for prose.
+python scripts/render_report.py --state research_state.json
+# → reports/<slug>_<YYYYMMDD>.md by default; pass --output PATH to override.
+
+# After filling in the prose, lint every [^id] anchor against
+# state.papers. Catches typo'd anchors before the report ships.
+python scripts/render_report.py --state research_state.json \
+  --lint reports/<slug>_<YYYYMMDD>.md
+
 # Export bibliography in the user's preferred format
 python scripts/export_bibtex.py --state research_state.json --format bibtex --output refs.bib
 python scripts/export_bibtex.py --state research_state.json --format csl-json --output refs.json
 ```
 
-The report body uses `[^id]` anchors (the paper id from state). The bibliography section at the bottom lists each cited paper with DOI/URL. Any claim missing an anchor must be removed or cited.
+The scaffold's body uses `[^id]` anchors (the paper id from state). The
+bibliography section at the bottom carries one definition per selected
+paper. The lint mode flags `unknown_anchors_used` (typos) and
+`undefined_in_text` (anchors with no footnote definition); both are
+blockers. `unused_definitions` is a soft signal — selected papers that
+ended up not cited inline.
 
 **Save path convention:** `reports/<slug>_<YYYYMMDD>.md`. The skill does not write outside the working directory unless the user specifies a path.
 
@@ -291,6 +308,7 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 | `build_citation_graph.py` | Forward/backward snowballing via OpenAlex. |
 | `extract_pdf.py` | Full-text extraction (pypdf). Accepts `--input`, `--url`, or `--doi`. DOI mode resolves via [paper-fetch](https://github.com/Agents365-ai/paper-fetch) skill if installed, falls back to Unpaywall. Safe on scanned PDFs (skips, emits warning). |
 | `export_bibtex.py` | BibTeX / CSL-JSON / RIS export from state. |
+| `render_report.py` | Phase 7 — render an archetype scaffold from `state.themes` / `state.tensions` / `state.queries` / `state.ranking` / `state.self_critique`, with `<!-- AGENT: ... -->` slots for prose. `--lint <report.md>` validates every `[^id]` anchor against `state.papers`. |
 
 All scripts accept `--help`, `--schema`, emit a structured JSON envelope on stdout, and use `research_state.json` as the single source of truth. Every script is idempotent on the state file (network-layer idempotency is P1 work).
 
