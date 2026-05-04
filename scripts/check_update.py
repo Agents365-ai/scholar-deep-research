@@ -128,6 +128,22 @@ def requirements_changed(old: str, new: str) -> bool:
     return rc == 0 and bool(out.strip())
 
 
+def commits_summary(old: str, new: str, *, limit: int = 5) -> list[str]:
+    """Subjects of feat/fix commits in (old, new], newest first, capped at
+    `limit`. Returns [] on any git failure — degrade-silent so a broken log
+    never blocks the update from reporting success.
+    """
+    rc, out, _ = run_git(
+        "log", "--no-merges",
+        "--pretty=format:%s",
+        "-E", "--grep=^(feat|fix)",
+        f"{old}..{new}",
+    )
+    if rc != 0 or not out:
+        return []
+    return out.splitlines()[:limit]
+
+
 def fast_forward() -> tuple[bool, str]:
     rc, _, stderr = run_git("pull", "--ff-only", "--quiet")
     return rc == 0, stderr
@@ -258,6 +274,9 @@ def main() -> None:
         "commits_behind": behind,
         "requirements_changed": reqs_changed,
     }
+    what_changed = commits_summary(local, upstream)
+    if what_changed:
+        data["what_changed"] = what_changed
     if reqs_changed:
         data["hint"] = ("Python dependencies changed — run "
                         "`pip install -r requirements.txt` before the "
