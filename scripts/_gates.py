@@ -181,6 +181,14 @@ def gate_4(state: dict[str, Any]) -> GateResult:
     agent-written full evidence record (`depth='full'`). Skim-tier
     incompleteness can never block this gate; only an unfinished agent
     fan-out can.
+
+    Failure-mode escape hatch: when a deep-tier paper's full text is
+    genuinely unreachable (paywall, OA chain exhausted, scanned PDF), the
+    Phase 3 agent prompt instructs the agent to write
+    `depth='shallow'` plus `evidence.method='evidence_unavailable: <code>'`.
+    Such records count toward deep-tier coverage (the agent committed and
+    explicitly recorded the failure) — otherwise a single unreachable PDF
+    would block the entire workflow forever.
     """
     selected = state.get("selected_ids") or []
     papers = state.get("papers") or {}
@@ -189,12 +197,38 @@ def gate_4(state: dict[str, Any]) -> GateResult:
 
     deep_ids = [pid for pid in selected
                 if (papers.get(pid) or {}).get("tier") == "deep"]
-    deep_full = [pid for pid in deep_ids
-                 if (papers.get(pid) or {}).get("depth") == "full"]
+    deep_full: list[str] = []
+    deep_unavailable: list[str] = []
+    for pid in deep_ids:
+        p = papers.get(pid) or {}
+        if p.get("depth") == "full":
+            deep_full.append(pid)
+            continue
+        # Accept depth=shallow when the agent explicitly recorded an
+        # evidence_unavailable failure — the deep-read attempt happened,
+        # the source was unreachable, the failure is auditable.
+        method = ((p.get("evidence") or {}).get("method") or "")
+        if (p.get("depth") == "shallow"
+                and method.startswith("evidence_unavailable:")):
+            deep_unavailable.append(pid)
+
+    deep_covered = len(deep_full) + len(deep_unavailable)
     # Vacuous truth when deep tier is empty (e.g. user ran with
     # --deep-ratio 0.0). The skill still ships, just with no agent-grade
     # evidence — that is a deliberate user choice.
-    deep_complete = len(deep_full) == len(deep_ids)
+    deep_complete = deep_covered == len(deep_ids)
+
+    coverage_detail = (
+        f"{len(deep_full)} / {len(deep_ids)} deep-tier papers have "
+        f"depth='full'"
+    )
+    if deep_unavailable:
+        coverage_detail += (
+            f"; {len(deep_unavailable)} additional accepted as "
+            f"depth='shallow' with method^='evidence_unavailable:' "
+            f"(unreachable source, failure recorded)"
+        )
+    coverage_detail += " (skim-tier excluded; depth='shallow' is by design)"
 
     checks = [
         _phase_is(state, 3),
@@ -207,9 +241,7 @@ def gate_4(state: dict[str, Any]) -> GateResult:
         Check(
             name="deep_tier_full_evidence",
             ok=deep_complete,
-            detail=f"{len(deep_full)} / {len(deep_ids)} deep-tier papers "
-                   f"have depth='full' "
-                   f"(skim-tier excluded; depth='shallow' is by design)",
+            detail=coverage_detail,
         ),
     ]
     return GateResult(target=4, checks=checks)

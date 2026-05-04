@@ -126,4 +126,4 @@ If 7/10 agents returned `status:"ok"` and 3 returned `status:"evidence_unavailab
 - `evidence.method` starts with `evidence_unavailable:` → genuine OA chain failure. Either accept the shallow record or open the URL manually and feed it through `extract_pdf.py --input <local.pdf>`.
 - No `evidence` field at all → agent crashed before write. Re-dispatch one agent for that id.
 
-The state CLI is idempotent on `evidence add` (re-writing the same id overwrites the record), so re-dispatching is safe.
+The state CLI is idempotent on `evidence` (re-writing the same id overwrites the record), so re-dispatching is safe.

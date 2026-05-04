@@ -150,6 +150,59 @@ class GatesTest(unittest.TestCase):
             self.assertIn("deep_tier_full_evidence", failing)
             self.assertNotIn("depth_marks_valid", failing)
 
+    def test_g4_pass_with_evidence_unavailable_marker(self) -> None:
+        """Deep tier paper with depth=shallow + method='evidence_unavailable:...'
+        passes G4 — that's the documented failure-mode escape hatch from
+        references/agent_prompts/phase3_deep_read.md.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            self._write_state(
+                state,
+                phase=3,
+                selected_ids=["p1", "p2", "p3"],
+                papers={
+                    "p1": {"id": "p1", "depth": "full", "tier": "deep"},
+                    # p2: deep tier but PDF unreachable — agent recorded
+                    # the failure per the documented contract.
+                    "p2": {"id": "p2", "depth": "shallow", "tier": "deep",
+                           "evidence": {
+                               "method": "evidence_unavailable: paywall_no_oa",
+                               "findings": ["abstract excerpt: ..."],
+                           }},
+                    "p3": {"id": "p3", "depth": "shallow", "tier": "skim"},
+                },
+            )
+            env = run_script("research_state.py", [
+                "--state", str(state), "advance", "--to", "4", "--check-only",
+            ])
+            self.assertTrue(env["data"]["met"])
+            cov = next(c for c in env["data"]["gate"]["checks"]
+                       if c["name"] == "deep_tier_full_evidence")
+            self.assertIn("evidence_unavailable", cov["detail"])
+
+    def test_g4_fails_for_shallow_without_evidence_unavailable_marker(self) -> None:
+        """A naked depth=shallow on a deep-tier paper (no marker) still blocks G4."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            self._write_state(
+                state,
+                phase=3,
+                selected_ids=["p1"],
+                papers={
+                    # method exists but does NOT start with evidence_unavailable:
+                    "p1": {"id": "p1", "depth": "shallow", "tier": "deep",
+                           "evidence": {"method": "abstract-only triage",
+                                        "findings": ["..."]}},
+                },
+            )
+            env = run_script("research_state.py", [
+                "--state", str(state), "advance", "--to", "4", "--check-only",
+            ], expect_rc=3)
+            failing = [c["name"] for c in env["error"]["gate"]["checks"]
+                       if not c["ok"]]
+            self.assertIn("deep_tier_full_evidence", failing)
+
     def test_g6_fail_without_themes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "s.json"

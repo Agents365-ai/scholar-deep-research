@@ -185,10 +185,10 @@ Phase 3 splits by tier:
 The agent prompt template lives at `references/agent_prompts/phase3_deep_read.md`. Load it once, instantiate per paper, and dispatch all N tool_use calls in a **single message** so they fan out concurrently. Per-agent contract:
 
 - **Input:** `paper_id`, `doi`, `pdf_url`, `abstract`, `question`, `state_path`
-- **Action:** `extract_pdf.py --doi <doi> --output <tmp>` → read text → write `evidence add --depth full`
+- **Action:** `extract_pdf.py --doi <doi> --output <tmp>` → read text → write `evidence --depth full`
 - **Output:** one line `{"paper_id": "...", "status": "ok"|"evidence_unavailable", ...}`
 
-The state CLI is exclusive-locked, so N agents writing concurrent `evidence add` calls are serialized automatically — no coordination needed.
+The state CLI is exclusive-locked, so N agents writing concurrent `evidence` calls are serialized automatically — no coordination needed.
 
 ```bash
 # After all wave(s) complete, verify deep-tier coverage:
@@ -412,7 +412,7 @@ The gate predicates are enforced in `scripts/_gates.py`. Direct `set --field pha
 | G1 (→ 1) | Question set, archetype valid, state initialized. *`≥3 keyword clusters` is host-checked.* |
 | G2 (→ 2) | `overall_saturated == true` across all queried sources AND ≥3 distinct sources in `state.queries`. |
 | G3 (→ 3) | `state.ranking` recorded; `selected_ids` non-empty; every selected paper has `score_components`; `state.triage_complete=true` (run `skim_papers.py`). |
-| G4 (→ 4) | All selected papers have `depth ∈ {full, shallow}` AND **every `tier=deep` paper has `depth=full`** (skim-tier `depth=shallow` is by design and does not block). |
+| G4 (→ 4) | All selected papers have `depth ∈ {full, shallow}` AND every `tier=deep` paper either (a) has `depth=full`, or (b) has `depth=shallow` *with* `evidence.method` starting `evidence_unavailable:` — the documented failure-mode escape hatch for unreachable PDFs. Skim-tier `depth=shallow` is by design and does not block. |
 | G5 (→ 5) | ≥1 query with `source=openalex_citation_chase` and `hits > 0`. |
 | G6 (→ 6) | `len(themes) ≥ 3` AND (`len(tensions) ≥ 1` OR a critique finding mentioning "no tensions"). |
 | G7 (→ 7) | `state.self_critique.appendix` non-empty; `len(resolved) ≥ len(findings)`. |
