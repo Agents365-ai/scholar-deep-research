@@ -57,7 +57,20 @@ ${question}
    - limitations       : what the paper itself acknowledges + what you noticed
    - relevance         : 1–2 sentences on how this moves the question forward
 
-3. Write evidence back to state:
+3. Write evidence back to state. **Prefer the JSON path** — it skips
+   the multi-quote shell escape dance that bites when findings contain
+   single quotes, unicode, or section headers:
+
+   ```bash
+   echo '${json_payload}' | python scripts/research_state.py \
+     --state ${state_path} evidence --id '${paper_id}' --from-json -
+   ```
+
+   Where `${json_payload}` is `{"method": "...", "findings": ["...", ...],
+   "limitations": "...", "relevance": "...", "depth": "full"}`. JSON's
+   `depth` wins over the `--depth` flag.
+
+   Structured mode is still supported for short single invocations:
    ```bash
    python scripts/research_state.py --state ${state_path} evidence \
      --id '${paper_id}' --depth full \

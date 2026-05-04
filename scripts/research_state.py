@@ -1113,8 +1113,185 @@ def cmd_query(args: argparse.Namespace) -> None:
     ok(items, count=len(items), has_more=False)
 
 
+def cmd_status(args: argparse.Namespace) -> None:
+    """Compact "where am I, what's next" summary.
+
+    Returns a flat dict so agents can call this once at the top of a
+    session to learn the phase + counts + the next gate's pending
+    checks without chaining `query summary` + `saturation` +
+    `advance --check-only`. Read-only; never mutates state.
+
+    The `next_gate` block carries the result of evaluating the gate
+    for `current_phase + 1` against current state. `next_commands`
+    surfaces the same hint list that a failed `advance` would produce,
+    so an agent can read this envelope and act without a second call.
+    """
+    from _gates import GATES, next_hints_for
+
+    state = load_state(Path(args.state))
+
+    papers = state.get("papers") or {}
+    selected_ids = state.get("selected_ids") or []
+    selected = [papers[pid] for pid in selected_ids if pid in papers]
+
+    by_tier: dict[str, int] = {}
+    by_depth: dict[str, int] = {}
+    for p in selected:
+        tier = p.get("tier") or "untriaged"
+        by_tier[tier] = by_tier.get(tier, 0) + 1
+        depth = p.get("depth") or "missing"
+        by_depth[depth] = by_depth.get(depth, 0) + 1
+
+    queries = state.get("queries") or []
+    by_source: dict[str, int] = {}
+    for q in queries:
+        s = q.get("source") or "unknown"
+        by_source[s] = by_source.get(s, 0) + 1
+
+    crit = state.get("self_critique") or {}
+
+    current = state.get("phase", 0)
+    target = current + 1
+    next_gate_info: dict[str, Any] | None = None
+    next_hint_cmds: list[str] = []
+    if target in GATES:
+        gate_fn = GATES[target]
+        try:
+            if target == 2:
+                result = gate_fn(
+                    state, compute_saturation=compute_saturation)
+            else:
+                result = gate_fn(state)
+            failing = [c.name for c in result.checks if not c.ok]
+            next_gate_info = {
+                "target": target,
+                "met": result.met,
+                "failing_checks": failing,
+            }
+            if not result.met:
+                next_hint_cmds = next_hints_for(result.checks, args.state)
+        except Exception:
+            # Partial state can make gate compute raise (e.g. saturation
+            # before any query). Status must never throw — leave the
+            # block None so callers can still see the rest of the
+            # snapshot.
+            pass
+
+    ok({
+        "phase": current,
+        "archetype": state.get("archetype"),
+        "question": state.get("question"),
+        "papers": {
+            "total": len(papers),
+            "selected": len(selected_ids),
+            "by_tier": by_tier,
+            "by_depth": by_depth,
+        },
+        "queries": {
+            "total": len(queries),
+            "by_source": by_source,
+        },
+        "synthesis": {
+            "themes": len(state.get("themes") or []),
+            "tensions": len(state.get("tensions") or []),
+        },
+        "critique": {
+            "findings": len(crit.get("findings") or []),
+            "resolved": len(crit.get("resolved") or []),
+            "appendix_populated": bool(crit.get("appendix")),
+        },
+        "report_path": state.get("report_path"),
+        "next_gate": next_gate_info,
+        "next_commands": next_hint_cmds,
+    })
+
+
 def cmd_evidence(args: argparse.Namespace) -> None:
-    """Attach evidence (extracted reading) to a paper."""
+    """Attach evidence (extracted reading) to a paper.
+
+    Two mutually-exclusive input modes:
+
+      - **structured**: `--method "..." --findings "a" "b" --limitations "..."
+        --relevance "..."`. The original path; works fine for short single
+        invocations.
+
+      - **JSON**: `--from-json <path>` or `--from-json -` (stdin). Payload
+        shape: `{"method": str, "findings": [str], "limitations": str,
+        "relevance": str, "depth": "full"|"shallow"}`. Built for parallel
+        agents that compose evidence in Python — skipping the multi-quote
+        shell escape dance is the entire reason this path exists. The
+        Phase 3 sub-agent fan-out hits ~10x the JSON path each session.
+
+    Mixing the two modes is rejected (`inconsistent_input`) so the
+    precedence rule cannot become a silent footgun.
+    """
+    if args.from_json is not None:
+        passed_structured = any(getattr(args, f) is not None for f in
+                                ("method", "findings", "limitations",
+                                 "relevance"))
+        if passed_structured:
+            err("inconsistent_input",
+                "--from-json is mutually exclusive with --method / "
+                "--findings / --limitations / --relevance. Pick one mode.",
+                retryable=False, exit_code=EXIT_VALIDATION)
+        try:
+            if args.from_json == "-":
+                raw = sys.stdin.read()
+            else:
+                raw = Path(args.from_json).read_text()
+        except (FileNotFoundError, OSError) as e:
+            err("from_json_unreadable",
+                f"--from-json source '{args.from_json}' could not be read: {e}",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.from_json)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            err("invalid_json",
+                f"--from-json payload is not valid JSON: {e}",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.from_json)
+        if not isinstance(payload, dict):
+            err("invalid_json",
+                "--from-json payload must be a JSON object, not "
+                f"{type(payload).__name__}.",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                source=args.from_json)
+        method = payload.get("method")
+        # JSON's depth wins over the argparse default; if absent, fall
+        # back to the explicit --depth flag (which itself defaults to
+        # "full" via argparse).
+        depth = payload.get("depth", args.depth)
+        findings = payload.get("findings") or []
+        limitations = payload.get("limitations") or ""
+        relevance = payload.get("relevance") or ""
+    else:
+        if not args.method:
+            err("missing_field",
+                "--method is required (or use --from-json to supply via JSON).",
+                retryable=False, exit_code=EXIT_VALIDATION,
+                field="method")
+        method = args.method
+        depth = args.depth
+        findings = args.findings or []
+        limitations = args.limitations or ""
+        relevance = args.relevance or ""
+
+    if not isinstance(method, str) or not method.strip():
+        err("missing_field",
+            "evidence.method must be a non-empty string.",
+            retryable=False, exit_code=EXIT_VALIDATION, field="method")
+    if not isinstance(findings, list) or not all(
+            isinstance(f, str) for f in findings):
+        err("invalid_field",
+            "evidence.findings must be a list of strings.",
+            retryable=False, exit_code=EXIT_VALIDATION, field="findings")
+    if depth not in ("full", "shallow"):
+        err("invalid_field",
+            f"evidence.depth must be 'full' or 'shallow', not {depth!r}.",
+            retryable=False, exit_code=EXIT_VALIDATION, field="depth",
+            allowed=["full", "shallow"])
+
     def mutator(state: dict[str, Any]) -> dict[str, Any]:
         if args.id not in state["papers"]:
             err("unknown_paper_id",
@@ -1123,16 +1300,16 @@ def cmd_evidence(args: argparse.Namespace) -> None:
                 id=args.id)
         paper = state["papers"][args.id]
         paper["evidence"] = {
-            "method": args.method,
-            "findings": args.findings or [],
-            "limitations": args.limitations or "",
-            "relevance": args.relevance or "",
+            "method": method,
+            "findings": findings,
+            "limitations": limitations,
+            "relevance": relevance,
         }
-        paper["depth"] = args.depth
+        paper["depth"] = depth
         return state
 
     _locked_rmw(Path(args.state), mutator)
-    ok({"id": args.id, "depth": args.depth})
+    ok({"id": args.id, "depth": depth})
 
 
 def cmd_theme(args: argparse.Namespace) -> None:
@@ -1508,13 +1685,26 @@ def build_parser() -> argparse.ArgumentParser:
                                     "diagnostics"])
     s.set_defaults(func=cmd_query)
 
+    s = sub.add_parser(
+        "status",
+        help='Compact "where am I, what\'s next" snapshot (read-only)')
+    set_command_meta(s, since="0.10.0", tier="read")
+    s.set_defaults(func=cmd_status)
+
     s = sub.add_parser("evidence", help="Attach evidence to a paper")
     s.add_argument("--id", required=True)
-    s.add_argument("--method", required=True)
+    s.add_argument("--method",
+                   help="Required unless --from-json is given.")
     s.add_argument("--findings", nargs="*")
     s.add_argument("--limitations")
     s.add_argument("--relevance")
     s.add_argument("--depth", choices=["full", "shallow"], default="full")
+    s.add_argument(
+        "--from-json",
+        help="Read {method,findings,limitations,relevance[,depth]} from "
+             "this JSON file. Use '-' for stdin. Mutually exclusive with "
+             "--method/--findings/--limitations/--relevance.")
+    set_command_meta(s, since="0.10.0", tier="write")
     s.set_defaults(func=cmd_evidence)
 
     # Replay/audit subcommands: apply a pre-computed patch from a JSON file.
