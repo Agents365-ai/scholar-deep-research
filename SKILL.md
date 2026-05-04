@@ -99,8 +99,10 @@ python scripts/search_openalex.py --query "<cluster 1>" --limit 50 --state resea
 python scripts/search_openalex.py --query "<cluster 2>" --limit 50 --state research_state.json
 
 # Domain-specific (use when relevant)
-python scripts/search_arxiv.py  --query "<cluster>" --limit 50 --state research_state.json  # CS/ML/physics
-python scripts/search_pubmed.py --query "<cluster>" --limit 50 --state research_state.json  # biomedical
+python scripts/search_arxiv.py    --query "<cluster>" --limit 50 --state research_state.json  # CS/ML/physics preprints
+python scripts/search_dblp.py     --query "<cluster>" --limit 50 --state research_state.json  # CS gold-standard bibliography (no abstracts)
+python scripts/search_pubmed.py   --query "<cluster>" --limit 50 --state research_state.json  # biomedical (PubMed)
+python scripts/search_biorxiv.py  --query "<cluster>" --limit 50 --state research_state.json  # life-sci preprints (bioRxiv + medRxiv via Europe PMC)
 python scripts/search_crossref.py --query "<cluster>" --limit 50 --state research_state.json  # DOI-backed metadata
 
 # Open-web coverage (optional, requires EXA_API_KEY) — finds material the
