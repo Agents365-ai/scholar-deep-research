@@ -63,7 +63,7 @@ Output: `reports/<slug>_<YYYYMMDD>.md` plus a matching `.bib`.
 ## What you get
 
 - **Phase 0..7 cited-report pipeline** with 7 enforced phase-transition gates (G1..G7 in `scripts/_gates.py`)
-- **6 federated sources** — OpenAlex, arXiv, Crossref, PubMed, DBLP, bioRxiv. All free, none require an API key
+- **7 federated sources** — OpenAlex, arXiv, Crossref, PubMed, DBLP, bioRxiv (all free, no key); Exa (open-web, opt-in via `EXA_API_KEY`)
 - **Cross-source deduplication** — DOI-first, title-similarity fallback; one paper, one record
 - **Three-axis saturation** — paper / author / venue novelty all must drop below threshold for Phase 1 to terminate. Catches the failure mode where queries keep surfacing different papers from the same lab while exploration has stalled
 - **Parallel deep-read fan-out (Phase 3)** — selected papers split into `deep` / `skim` / `defer` tiers. Deep tier dispatched in waves of 8–10 isolated-context agents, each reading one PDF; optional PDF prefetch ahead of dispatch surfaces paywalled papers as `evidence_unavailable` *before* a wave starts

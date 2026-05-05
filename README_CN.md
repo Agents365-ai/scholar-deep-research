@@ -2,7 +2,7 @@
 
 [English](README.md) &middot; 🌐 **官网:** [agents365-ai.github.io/scholar-deep-research/zh.html](https://agents365-ai.github.io/scholar-deep-research/zh.html)
 
-8 阶段（Phase 0..7）、脚本驱动的学术研究工作流，将研究问题转化为结构化、带引用的研究报告。跨 6 个数据库联邦检索，强制自我批判，Phase 3 并行精读派发。
+8 阶段（Phase 0..7）、脚本驱动的学术研究工作流，将研究问题转化为结构化、带引用的研究报告。跨 7 个数据库联邦检索，强制自我批判，Phase 3 并行精读派发，Phase 4 双 backend（OpenAlex + Semantic Scholar）引用追溯。
 
 ## 为什么有这个项目
 
@@ -60,7 +60,7 @@ skill 自动走完 8 个阶段：
 ## 你能拿到什么
 
 - **Phase 0..7 带引用的报告流水线**，相邻阶段之间有 7 道强制门控（`scripts/_gates.py` 中的 G1..G7）
-- **6 个联邦数据源** — OpenAlex、arXiv、Crossref、PubMed、DBLP、bioRxiv，全部免费、无需 API key
+- **7 个联邦数据源** — OpenAlex、arXiv、Crossref、PubMed、DBLP、bioRxiv（全部免费、无需 API key）；Exa（开放网页检索，可选，需 `EXA_API_KEY`）
 - **跨源去重** — DOI 优先、标题相似度兜底；一篇论文一条记录
 - **三轴饱和度** — 论文新增 / 作者新增 / 期刊新增三轴必须**同时**低于阈值，Phase 1 才停止。能识破"查询不断检出同一实验室或同一期刊的不同论文，但探索其实已停滞"这种失败模式
 - **Phase 3 并行精读派发** — 选中论文按确定性 triage 切成 `deep` / `skim` / `defer` 三档。Deep 档以每波 8–10 个隔离上下文 agent 派发，各自读一篇 PDF；可选 PDF 预取在派发**前**就把付费墙论文标成 `evidence_unavailable`
@@ -113,7 +113,7 @@ flowchart LR
 
 | 能力 | 原生智能体 | 本 skill |
 |------|-----------|---------|
-| 多源联邦检索 | 一次一个源 | 6 个源联邦 |
+| 多源联邦检索 | 一次一个源 | 7 个源联邦 |
 | 多轮检索 + 饱和度门控 | 一次性 | 三轴饱和度检查 |
 | 跨源去重 | 无 | DOI 优先、标题相似度兜底 |
 | 透明排序公式 | 黑盒 | 公式 + 每篇论文分量写入 state |
