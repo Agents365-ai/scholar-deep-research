@@ -71,6 +71,77 @@ def _existing_pdf_ok(paper: dict[str, Any]) -> bool:
     return bool(p) and Path(p).is_file()
 
 
+def _scan_dropped_pdf(out_root: Path, paper_id: str) -> Path | None:
+    """Detect a user-dropped PDF in the per-paper cache subdir.
+
+    When prefetch can't auto-fetch (paywall) or has nothing to fetch
+    (no DOI), the user can manually drop a PDF into
+    `${out_root}/<safe_subdir>/`. On the next prefetch run, this scan
+    picks the file up so the paper is classified as cached without
+    re-attempting fetch.
+    """
+    subdir = out_root / _safe_subdir(paper_id)
+    if not subdir.is_dir():
+        return None
+    pdfs = sorted(subdir.glob("*.pdf"))
+    return pdfs[0] if pdfs else None
+
+
+def _build_manifest_entry(paper: dict[str, Any], out_root: Path) -> dict[str, Any]:
+    """Produce a manifest row describing where to drop a hand-fetched PDF."""
+    from urllib.parse import quote_plus
+    pid = paper["id"]
+    drop_at = out_root / _safe_subdir(pid) / "manual.pdf"
+    doi = paper.get("doi")
+    title = paper.get("title") or ""
+    alt_urls: list[str] = []
+    if doi:
+        alt_urls.append(f"https://doi.org/{doi}")
+    if title:
+        alt_urls.append(
+            f"https://scholar.google.com/scholar?q={quote_plus(title)}")
+    return {
+        "id": pid,
+        "doi": doi,
+        "title": title,
+        "authors": (paper.get("authors") or [])[:2],
+        "year": paper.get("year"),
+        "drop_at": str(drop_at),
+        "current_status": paper.get("pdf_status") or "pending",
+        "failure_code": paper.get("pdf_failure_code"),
+        "alt_urls": alt_urls,
+    }
+
+
+def _emit_manifest(
+    state: dict[str, Any],
+    tiers: list[str],
+    out_root: Path,
+) -> list[dict[str, Any]]:
+    """Read-only: list papers in --tier scope that need manual download.
+
+    Excludes papers that are already cached (via state.pdf_path or via
+    a user-dropped file in the cache subdir from a prior round).
+    """
+    selected = state.get("selected_ids") or []
+    papers = state.get("papers") or {}
+    tier_set = set(tiers)
+    needs: list[dict[str, Any]] = []
+    for pid in selected:
+        paper = papers.get(pid)
+        if not paper:
+            continue
+        tier = paper.get("tier")
+        if tier and tier not in tier_set:
+            continue
+        if _existing_pdf_ok(paper):
+            continue
+        if _scan_dropped_pdf(out_root, pid):
+            continue
+        needs.append(_build_manifest_entry(paper, out_root))
+    return needs
+
+
 def _fetch_one(
     paper_id: str,
     doi: str,
@@ -115,6 +186,7 @@ def _fetch_one(
 def _classify_papers(
     state: dict[str, Any],
     tiers: list[str],
+    out_root: Path,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     """Partition selected papers into (to_fetch, skipped_records).
 
@@ -122,6 +194,11 @@ def _classify_papers(
         to_fetch: list of {id, doi} dicts to dispatch through the pool.
         skipped_records: {id -> record} for papers we won't fetch but
             still want to update on (no_doi, wrong_tier, already_cached).
+
+    Cached classification covers two routes: state.pdf_path pointing at
+    a real file, OR a user-dropped *.pdf inside the per-paper cache
+    subdir (the second route is what makes the --emit-manifest →
+    user downloads → re-run loop work without manual state edits).
     """
     selected = state.get("selected_ids") or []
     papers = state.get("papers") or {}
@@ -143,6 +220,16 @@ def _classify_papers(
                 "pdf_path": paper.get("pdf_path"),
                 "pdf_source": paper.get("pdf_source"),
                 "pdf_bytes": paper.get("pdf_bytes"),
+            }
+            continue
+        dropped = _scan_dropped_pdf(out_root, pid)
+        if dropped is not None:
+            skipped[pid] = {
+                "id": pid,
+                "pdf_status": "cached",
+                "pdf_path": str(dropped),
+                "pdf_source": "user_provided",
+                "pdf_bytes": dropped.stat().st_size,
             }
             continue
         doi = paper.get("doi")
@@ -192,6 +279,13 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true",
                    help="List papers that would be fetched; do NOT download "
                         "or write to state.")
+    p.add_argument("--emit-manifest", action="store_true",
+                   help="Read-only: list papers in --tier scope that lack a "
+                        "PDF (failed, no_doi, or never attempted) with the "
+                        "exact path to drop a manually-fetched copy at. "
+                        "User can then re-run prefetch_pdfs.py and the dropped "
+                        "files will be auto-absorbed as pdf_source=user_provided. "
+                        "Mutually exclusive with --dry-run / --idempotency-key.")
     p.add_argument("--idempotency-key",
                    help="Retry-safe key. Retried calls with the same key "
                         "return the original result without re-fetching.")
@@ -201,6 +295,12 @@ def main() -> None:
     maybe_emit_schema(p, "prefetch_pdfs")
     args = p.parse_args()
     reject_dry_run_with_idempotency(args)
+
+    if args.emit_manifest and (args.dry_run or args.idempotency_key):
+        err("inconsistent_input",
+            "--emit-manifest is read-only and mutually exclusive with "
+            "--dry-run / --idempotency-key.",
+            retryable=False, exit_code=EXIT_VALIDATION)
 
     if args.concurrency < 1:
         err("invalid_concurrency",
@@ -212,7 +312,23 @@ def main() -> None:
     state = load_state(path)
     out_root = Path(args.out_dir)
 
-    to_fetch, skipped = _classify_papers(state, args.tier)
+    if args.emit_manifest:
+        needs = _emit_manifest(state, args.tier, out_root)
+        ok({
+            "tier": args.tier,
+            "out_dir": str(out_root),
+            "needs_user_download": needs,
+            "count": len(needs),
+            "next_steps": [
+                "Drop each PDF at its drop_at path "
+                "(any *.pdf filename in that subdir works).",
+                "Re-run prefetch_pdfs.py — dropped files are absorbed "
+                "as pdf_source=user_provided without re-fetch.",
+            ],
+        })
+        return
+
+    to_fetch, skipped = _classify_papers(state, args.tier, out_root)
 
     if args.dry_run:
         ok({
