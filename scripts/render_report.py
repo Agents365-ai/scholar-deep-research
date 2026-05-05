@@ -99,25 +99,31 @@ def _render_header(state: dict[str, Any]) -> str:
     )
 
 
-def _render_executive_summary() -> str:
-    return (
-        "\n## Executive summary\n\n"
-        "<!-- AGENT: 3–5 bullets summarizing the report's headline findings.\n"
-        "Each bullet should anchor to ≥1 paper via [^id]. Avoid generic\n"
-        "claims — specific numbers and named methods. -->\n"
-        "\n"
-        "- ...\n"
-        "- ...\n"
-        "- ...\n"
-    )
+_EXECUTIVE_SUMMARY = (
+    "\n## Executive summary\n\n"
+    "<!-- AGENT: 3–5 bullets summarizing the report's headline findings.\n"
+    "Each bullet should anchor to ≥1 paper via [^id]. Avoid generic\n"
+    "claims — specific numbers and named methods. -->\n"
+    "\n"
+    "- ...\n"
+    "- ...\n"
+    "- ...\n"
+)
 
 
-def _render_background() -> str:
-    return (
-        "\n## 1. Background\n\n"
-        "<!-- AGENT: 2–3 paragraphs defining key terms, scope, and why\n"
-        "the question matters. Every non-trivial claim must anchor [^id]. -->\n"
-    )
+_BACKGROUND = (
+    "\n## 1. Background\n\n"
+    "<!-- AGENT: 2–3 paragraphs defining key terms, scope, and why\n"
+    "the question matters. Every non-trivial claim must anchor [^id]. -->\n"
+)
+
+
+_SYNTHESIS = (
+    "\n## Synthesis\n\n"
+    "<!-- AGENT: this is the section that earns the report. Where do\n"
+    "the themes connect? What is the dominant view? Where is the field\n"
+    "actually moving? Don't summarize — argue. -->\n"
+)
 
 
 def _render_themes(state: dict[str, Any]) -> str:
@@ -171,33 +177,12 @@ def _render_tensions(state: dict[str, Any]) -> str:
     return "".join(out)
 
 
-def _render_synthesis() -> str:
-    return (
-        "\n## Synthesis\n\n"
-        "<!-- AGENT: this is the section that earns the report. Where do\n"
-        "the themes connect? What is the dominant view? Where is the field\n"
-        "actually moving? Don't summarize — argue. -->\n"
-    )
-
-
-def _render_gaps(state: dict[str, Any]) -> str:
-    selected = _papers_for_ids(state, state.get("selected_ids") or [])
-    no_evidence = [p for p in selected if not (p.get("evidence") or {}).get("method")]
-    note = ""
-    if no_evidence:
-        note = (
-            f"\n<!-- AGENT note: {len(no_evidence)} selected paper(s) have\n"
-            "no evidence record. Either backfill via Phase 3 or treat them\n"
-            "as candidates for further reading rather than load-bearing\n"
-            "evidence. -->\n"
-        )
-    return (
-        "\n## Open questions and gaps\n\n"
-        "<!-- AGENT: bullet list of gaps. For each, name what the corpus\n"
-        "does NOT cover and pinpoint where you'd start digging. -->\n"
-        f"{note}"
-        "\n- Gap 1: ...\n- Gap 2: ...\n- Gap 3: ...\n"
-    )
+_GAPS = (
+    "\n## Open questions and gaps\n\n"
+    "<!-- AGENT: bullet list of gaps. For each, name what the corpus\n"
+    "does NOT cover and pinpoint where you'd start digging. -->\n"
+    "\n- Gap 1: ...\n- Gap 2: ...\n- Gap 3: ...\n"
+)
 
 
 def _render_recommendations(state: dict[str, Any]) -> str:
@@ -303,12 +288,12 @@ def _render_bibliography(state: dict[str, Any], slug: str) -> str:
 def render(state: dict[str, Any]) -> str:
     return (
         _render_header(state)
-        + _render_executive_summary()
-        + _render_background()
+        + _EXECUTIVE_SUMMARY
+        + _BACKGROUND
         + _render_themes(state)
         + _render_tensions(state)
-        + _render_synthesis()
-        + _render_gaps(state)
+        + _SYNTHESIS
+        + _GAPS
         + _render_recommendations(state)
         + _render_methodology(state)
         + _render_critique_appendix(state)
