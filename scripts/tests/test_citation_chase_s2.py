@@ -63,6 +63,45 @@ class S2ClientUnitTest(unittest.TestCase):
         self.assertIsNone(s2_paper_id({"openalex_id": "W1"}))
         self.assertIsNone(s2_paper_id({}))
 
+    def test_record_failure_preserves_s2_error_fields(self):
+        """When S2 fetch raises, the seed_failures entry must carry the
+        structured `code` + `status` + `retryable` so agents can route on
+        it. Prior bug: _record_failure read .response.status_code (httpx
+        pattern) which silently swallowed S2Error.code."""
+        from build_citation_graph import SEED_FAILURES, _record_failure
+        from _s2_citations import S2Error
+
+        SEED_FAILURES.clear()
+        exc = S2Error("s2_unauthorized", "S2 rejected the request (401)",
+                      status=401, retryable=False)
+        _record_failure("doi:10.1/x", "s2_citations", exc)
+
+        self.assertEqual(len(SEED_FAILURES), 1)
+        rec = SEED_FAILURES[0]
+        self.assertEqual(rec["code"], "s2_unauthorized")
+        self.assertEqual(rec["status"], 401)
+        self.assertEqual(rec["retryable"], False)
+        self.assertEqual(rec["stage"], "s2_citations")
+        self.assertEqual(rec["seed_id"], "doi:10.1/x")
+
+    def test_record_failure_for_httpx_error_still_works(self):
+        """Regression: pre-existing httpx error path keeps working
+        (status comes from .response.status_code, no S2-specific fields)."""
+        from build_citation_graph import SEED_FAILURES, _record_failure
+
+        class FakeResp:
+            status_code = 503
+
+        class FakeHTTPError(Exception):
+            response = FakeResp()
+
+        SEED_FAILURES.clear()
+        _record_failure("openalex:W1", "fetch_work", FakeHTTPError("boom"))
+        rec = SEED_FAILURES[0]
+        self.assertEqual(rec["status"], 503)
+        # Code is None for non-S2 failures — agents key off `stage` for these.
+        self.assertIsNone(rec.get("code"))
+
     def test_normalize_s2_paper_fields(self):
         from _common import make_paper
         from _s2_citations import normalize_s2_paper
@@ -94,6 +133,17 @@ class CitationChaseSchemaTest(unittest.TestCase):
         self.assertIn("source", params)
         self.assertEqual(set(params["source"]["choices"]),
                          {"openalex", "s2", "both"})
+
+    def test_meta_block_has_since_and_tier(self):
+        """schema.meta carries `since` and `tier` so cached-schema agents
+        can detect drift when the contract changes."""
+        env = run_script("build_citation_graph.py", ["--schema"])
+        meta = env["data"].get("meta") or {}
+        self.assertIn("since", meta,
+                      "build_citation_graph schema is missing meta.since")
+        self.assertEqual(meta.get("tier"), "write",
+                         "build_citation_graph mutates state — meta.tier "
+                         "must be 'write' so safety UIs classify correctly")
 
 
 class CitationChaseS2BackendTest(unittest.TestCase):
