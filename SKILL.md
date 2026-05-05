@@ -173,6 +173,15 @@ Fetches every deep-tier paper's PDF into `${SCHOLAR_CACHE_DIR:-.scholar_cache}/p
 
 Failures land as `pdf_status='failed'` with a `pdf_failure_code` (`paper_fetch_error`, `no_open_access_pdf`, `pdf_download_failed`, …); papers without a DOI get `pdf_status='no_doi'`. Phase 3 agents check `pdf_path` first and only fall back to `extract_pdf.py --doi` if the prefetched path is missing. Re-running prefetch is cheap: papers with an existing `pdf_path` on disk are skipped (`pdf_status='cached'`).
 
+**Human-in-loop for paywalled PDFs.** When automatic fetch fails (paywall, OA chain exhausted, no DOI), surface a hand-fetch list to the user via `--emit-manifest` (read-only):
+
+```bash
+python scripts/prefetch_pdfs.py --state research_state.json --emit-manifest
+# Returns { needs_user_download: [{id, doi, title, drop_at, alt_urls}, ...] }
+```
+
+The user downloads each PDF (institutional VPN, ResearchGate, etc.) and drops it at the listed `drop_at` path (any `*.pdf` filename in that subdir works). On the next normal `prefetch_pdfs.py` run, dropped files are auto-absorbed as `pdf_source='user_provided'` without re-fetching.
+
 Skip prefetch entirely when paper-fetch is not installed AND you don't want Unpaywall traffic — Phase 3 agents will then download per-paper inside their own contexts (slower, noisier, but functionally identical).
 
 ### Phase 3 — Deep read (parallel agent fan-out)
