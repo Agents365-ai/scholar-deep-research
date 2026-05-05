@@ -29,6 +29,10 @@ from _common import (
     EXIT_UPSTREAM, EXIT_VALIDATION, USER_AGENT, UpstreamError, command_signature,
     err, make_paper, make_payload, maybe_emit_schema, ok, read_cache, write_cache,
 )
+from _s2_citations import (
+    S2Error, normalize_s2_paper, s2_get_citations, s2_get_references,
+    s2_paper_id,
+)
 from research_state import apply_citation_chase, load_state, make_paper_id
 
 WORKS = "https://api.openalex.org/works"
@@ -125,6 +129,46 @@ def normalize(w: dict[str, Any]) -> dict[str, Any]:
     return _normalize(w)
 
 
+def _chase_s2(seed: dict[str, Any], direction: str,
+              cited_by_limit: int) -> tuple[list[dict[str, Any]], bool]:
+    """Run S2 citation chase for one seed. Returns (records, success_flag).
+
+    `success_flag` is True when at least one S2 endpoint returned without
+    raising — empty results count as success (the paper exists in S2 but
+    has no records in the requested direction). Failures are appended to
+    SEED_FAILURES with stage names `s2_references` / `s2_citations`.
+    """
+    pid = s2_paper_id(seed)
+    if pid is None:
+        return [], False
+    new_records: list[dict[str, Any]] = []
+    success = False
+
+    if direction in ("backward", "both"):
+        try:
+            refs = s2_get_references(pid, max_results=cited_by_limit)
+            for r in refs:
+                kw = normalize_s2_paper(r)
+                if kw.get("title"):
+                    new_records.append(make_paper(**kw))
+            success = True
+        except S2Error as exc:
+            _record_failure(seed.get("id"), "s2_references", exc)
+
+    if direction in ("forward", "both"):
+        try:
+            cits = s2_get_citations(pid, max_results=cited_by_limit)
+            for c in cits:
+                kw = normalize_s2_paper(c)
+                if kw.get("title"):
+                    new_records.append(make_paper(**kw))
+            success = success or True
+        except S2Error as exc:
+            _record_failure(seed.get("id"), "s2_citations", exc)
+
+    return new_records, success
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Build citation graph from state.")
     p.add_argument(
@@ -136,6 +180,17 @@ def main() -> None:
                    help="Number of top-ranked papers to use as seeds")
     p.add_argument("--direction", choices=["forward", "backward", "both"],
                    default="both")
+    p.add_argument("--source", choices=["openalex", "s2", "both"],
+                   default="both",
+                   help="Citation graph backend(s). 'openalex' uses the "
+                        "OpenAlex Works API (good general coverage). 's2' "
+                        "uses Semantic Scholar (better for CS / arXiv / "
+                        "cross-disciplinary). 'both' runs both and merges "
+                        "results — re-ingest dedupes by id, so overlap is "
+                        "harmless. Default: both. S2 requires DOI / arXiv / "
+                        "PMID on each seed; seeds with only an OpenAlex id "
+                        "skip the S2 backend. S2 quota is higher with "
+                        "S2_API_KEY set.")
     p.add_argument("--depth", type=int, default=1,
                    help="Currently only depth=1 supported")
     p.add_argument("--cited-by-limit", type=int, default=50,
@@ -198,71 +253,102 @@ def main() -> None:
             "select` first.",
             retryable=False, exit_code=EXIT_VALIDATION)
 
-    seeds_with_oa = [s for s in seeds if s.get("openalex_id")]
-    skipped_seeds = [s["id"] for s in seeds if not s.get("openalex_id")]
+    use_openalex = args.source in ("openalex", "both")
+    use_s2 = args.source in ("s2", "both")
+
+    seeds_with_oa = [s for s in seeds if s.get("openalex_id")] if use_openalex else []
+    skipped_oa = ([s["id"] for s in seeds if not s.get("openalex_id")]
+                  if use_openalex else [])
+
+    seeds_for_s2 = [s for s in seeds if s2_paper_id(s)] if use_s2 else []
+    skipped_s2 = ([s["id"] for s in seeds if not s2_paper_id(s)]
+                  if use_s2 else [])
+
+    # Hard fail when only S2 was requested and no seed has a resolvable
+    # handle — running with no seeds is a no-op, but the caller should
+    # see a structured error rather than a silent zero-fetch envelope.
+    if args.source == "s2" and not seeds_for_s2:
+        err("no_resolvable_seeds",
+            "Source='s2' but no selected paper has a DOI / arXiv id / PMID. "
+            "Either re-run with --source=openalex or backfill paper handles.",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            seed_count=len(seeds))
 
     if args.dry_run:
-        # Each backward seed costs 1 metadata GET + ~1 batch GET per ~25 refs.
-        # We don't know ref counts without fetching, so estimate 2 req/seed.
-        # Each forward seed costs 1 cited-by page (--cited-by-limit).
         backward_req = 2 * len(seeds_with_oa) if args.direction in ("backward", "both") else 0
         forward_req = len(seeds_with_oa) if args.direction in ("forward", "both") else 0
+        s2_req_estimate = len(seeds_for_s2) * (
+            2 if args.direction == "both" else 1)
         ok({
             "dry_run": True,
             "would_fetch": {
-                "seeds": len(seeds_with_oa),
-                "skipped_seeds_without_openalex_id": skipped_seeds,
+                "source": args.source,
+                "seeds": max(len(seeds_with_oa), len(seeds_for_s2)),
+                "skipped_seeds_without_openalex_id": skipped_oa,
+                "skipped_seeds_without_resolvable_id": skipped_s2,
                 "direction": args.direction,
                 "cited_by_limit": args.cited_by_limit,
-                "estimated_requests": backward_req + forward_req,
-                "breakdown": {
-                    "backward_req_estimate": backward_req,
-                    "forward_req_estimate": forward_req,
+                "estimated_requests": backward_req + forward_req + s2_req_estimate,
+                "by_backend": {
+                    "openalex": {
+                        "seeds": len(seeds_with_oa),
+                        "estimated_requests": backward_req + forward_req,
+                    },
+                    "s2": {
+                        "seeds": len(seeds_for_s2),
+                        "estimated_requests": s2_req_estimate,
+                    },
                 },
-                "seed_ids": [s["id"] for s in seeds_with_oa],
-                "note": "Backward estimate assumes ~1 metadata GET + ~1 batch "
-                        "GET per seed; actual count depends on reference counts.",
+                "seed_ids": [s["id"] for s in seeds],
+                "note": "Estimates assume ~1 metadata + ~1 batch GET per "
+                        "OpenAlex seed and 1 GET per S2 endpoint.",
             },
         })
         return
 
     SEED_FAILURES.clear()
     new_records: list[dict[str, Any]] = []
-    attempts = 0              # seed×direction fetch attempts
     seeds_any_success: set[str] = set()
+    backends_used: list[str] = []
 
-    for seed in seeds_with_oa:
-        oa_id = seed["openalex_id"]
-        seed_success = False
-
-        if args.direction in ("backward", "both"):
-            attempts += 1
-            full = fetch_work(oa_id, args.email)
-            if full:
-                refs = full.get("referenced_works", [])
-                ref_ids = [r.rsplit("/", 1)[-1] for r in refs if r]
-                if ref_ids:
-                    works = fetch_referenced(oa_id, ref_ids, args.email)
-                    for w in works:
+    if use_openalex:
+        backends_used.append("openalex")
+        for seed in seeds_with_oa:
+            oa_id = seed["openalex_id"]
+            seed_success = False
+            if args.direction in ("backward", "both"):
+                full = fetch_work(oa_id, args.email)
+                if full:
+                    refs = full.get("referenced_works", [])
+                    ref_ids = [r.rsplit("/", 1)[-1] for r in refs if r]
+                    if ref_ids:
+                        works = fetch_referenced(oa_id, ref_ids, args.email)
+                        for w in works:
+                            new_records.append(normalize(w))
+                    seed_success = True
+            if args.direction in ("forward", "both"):
+                cited_by = fetch_cited_by(oa_id, args.cited_by_limit, args.email)
+                if cited_by or not SEED_FAILURES or SEED_FAILURES[-1]["seed_id"] != oa_id:
+                    for w in cited_by:
                         new_records.append(normalize(w))
-                seed_success = True
+                    seed_success = seed_success or True
+            if seed_success:
+                seeds_any_success.add(seed["id"])
 
-        if args.direction in ("forward", "both"):
-            attempts += 1
-            cited_by = fetch_cited_by(oa_id, args.cited_by_limit, args.email)
-            if cited_by or not SEED_FAILURES or SEED_FAILURES[-1]["seed_id"] != oa_id:
-                # Non-empty results, or no newly-recorded failure for this
-                # seed in this direction: count as success for this direction.
-                for w in cited_by:
-                    new_records.append(normalize(w))
-                seed_success = seed_success or True
+    if use_s2:
+        backends_used.append("s2")
+        for seed in seeds_for_s2:
+            records, ok_flag = _chase_s2(
+                seed, args.direction, args.cited_by_limit)
+            new_records.extend(records)
+            if ok_flag:
+                seeds_any_success.add(seed["id"])
 
-        if seed_success:
-            seeds_any_success.add(oa_id)
+    # Track distinct seeds that were actually attempted across any backend.
+    attempted_seed_ids = {s["id"] for s in seeds_with_oa} | {
+        s["id"] for s in seeds_for_s2}
+    seeds_attempted = len(attempted_seed_ids)
 
-    seeds_attempted = len(seeds_with_oa)
-    # "Wholly failed" = no seed got a successful fetch in any direction AND
-    # we actually tried to fetch something (not just dry-run / zero seeds).
     wholly_failed = (
         seeds_attempted > 0
         and not seeds_any_success
@@ -271,10 +357,11 @@ def main() -> None:
 
     if wholly_failed:
         err("upstream_error",
-            "All citation-chase seeds failed. OpenAlex may be down or "
-            "rate-limiting. Retry with the same --idempotency-key to resume.",
+            "All citation-chase seeds failed across requested backends. "
+            "Retry with the same --idempotency-key to resume.",
             retryable=True, exit_code=EXIT_UPSTREAM,
             seed_failures=SEED_FAILURES,
+            backends_used=backends_used,
             seeds_attempted=seeds_attempted,
             seeds_with_success=0)
 
@@ -283,16 +370,20 @@ def main() -> None:
         path,
         new_records,
         {
-            "source": "openalex_citation_chase",
-            "query": f"seeds={len(seeds)} direction={args.direction}",
+            "source": "_".join(backends_used) + "_citation_chase",
+            "query": f"seeds={len(seeds)} direction={args.direction} "
+                     f"source={args.source}",
         },
     )
 
     response = {
+        "source": args.source,
+        "backends_used": backends_used,
         "seeds": len(seeds),
         "seeds_used": seeds_attempted,
         "seeds_with_success": len(seeds_any_success),
-        "skipped_seeds_without_openalex_id": skipped_seeds,
+        "skipped_seeds_without_openalex_id": skipped_oa,
+        "skipped_seeds_without_resolvable_id": skipped_s2,
         "direction": args.direction,
         "fetched": len(new_records),
         "added": summary["added"],

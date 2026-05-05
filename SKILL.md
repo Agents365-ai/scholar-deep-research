@@ -228,6 +228,8 @@ python scripts/build_citation_graph.py \
 
 The script pulls backward references (what did this paper cite?) and forward citations (who cited this paper?), deduplicates against existing state, and writes new candidate papers with `discovered_via: citation_chase`. Run rank + deep read again on any new high-scoring additions.
 
+**Dual backend.** `--source openalex|s2|both` (default `both`). OpenAlex covers most fields well; Semantic Scholar (S2) has better CS / arXiv / cross-disciplinary coverage. The two graphs disagree more than you'd expect — running both then deduping by id surfaces real coverage gaps. S2 needs a DOI / arXiv id / PMID on each seed (it doesn't accept OpenAlex ids); seeds without one skip the S2 backend. `S2_API_KEY` env var raises the S2 quota; without it the public quota of ~1 req/s applies.
+
 **Idempotency.** When `--idempotency-key <k>` is set, the first successful run writes `{response, signature}` to `.scholar_cache/<hash>.json`. A retried run with the same key replays the cached response without re-hitting OpenAlex or re-mutating state. Reusing the same key with different arguments returns `idempotency_key_mismatch` rather than silently serving stale data. Cache directory: `SCHOLAR_CACHE_DIR` env var, default `.scholar_cache/`.
 
 **Special case — a highly cited paper has never been challenged.** If rank says a paper is top-3 by citations but no critiques appear in the corpus, search explicitly for `"<first author> <year>" critique OR limitations OR reanalysis OR failed replication`. This is the confirmation-bias backstop.
@@ -374,6 +376,7 @@ Trust-boundary configuration — set once by the human or orchestrator. CLI flag
 | `SCHOLAR_MAILTO` | `search_openalex.py`, `search_crossref.py`, `build_citation_graph.py` | Polite-pool email for OpenAlex / Crossref — higher rate limits |
 | `NCBI_API_KEY` | `search_pubmed.py` | NCBI E-utilities API key — higher rate limits |
 | `EXA_API_KEY` | `search_exa.py` | Exa API key — required to enable the open-web search provider |
+| `S2_API_KEY` | `build_citation_graph.py --source s2\|both` | Semantic Scholar API key — raises the public ~1 req/s quota. Optional; without it the S2 backend still works at the lower quota |
 | `SCHOLAR_CACHE_DIR` | `build_citation_graph.py` (any command that takes `--idempotency-key`) | Cache directory for idempotent-retry responses; default `.scholar_cache/` in cwd |
 | `PAPER_FETCH_SCRIPT` | `extract_pdf.py` | Path to paper-fetch's `fetch.py`. If unset, auto-discovers across all known skill install paths (Claude Code, OpenCode, OpenClaw, Hermes, ~/.agents). If not found, falls back to Unpaywall |
 | `SCHOLAR_SKIP_UPDATE_CHECK` | `check_update.py` | Set to any non-empty value to pin the current version and skip Phase 0 Step 0's auto-update |
