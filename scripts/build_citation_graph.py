@@ -27,7 +27,8 @@ from typing import Any
 
 from _common import (
     EXIT_UPSTREAM, EXIT_VALIDATION, USER_AGENT, UpstreamError, command_signature,
-    err, make_paper, make_payload, maybe_emit_schema, ok, read_cache, write_cache,
+    err, make_paper, make_payload, maybe_emit_schema, ok, read_cache,
+    set_command_meta, write_cache,
 )
 from _s2_citations import (
     S2Error, normalize_s2_paper, s2_get_citations, s2_get_references,
@@ -45,15 +46,30 @@ SEED_FAILURES: list[dict[str, Any]] = []
 
 
 def _record_failure(seed_id: str | None, stage: str, exc: Exception) -> None:
-    import httpx  # lazy (only to read the status code if present)
-    status = None
-    resp = getattr(exc, "response", None)
-    if resp is not None:
-        status = getattr(resp, "status_code", None)
+    """Append a structured record of a per-seed fetch failure.
+
+    Two backend-specific shapes are flattened into one envelope row:
+      - S2Error: carries .code (e.g. "s2_unauthorized"), .status, .retryable.
+      - httpx.HTTPError: carries .response.status_code; no machine-routable
+        code for now (callers key off `stage`).
+    """
+    status: int | None = None
+    code: str | None = None
+    retryable: bool | None = None
+    if isinstance(exc, S2Error):
+        status = exc.status
+        code = exc.code
+        retryable = exc.retryable
+    else:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            status = getattr(resp, "status_code", None)
     SEED_FAILURES.append({
         "seed_id": seed_id,
         "stage": stage,
         "status": status,
+        "code": code,
+        "retryable": retryable,
         "message": f"{type(exc).__name__}: {exc}",
     })
     sys.stderr.write(f"{stage} error for {seed_id}: {exc}\n")
@@ -208,6 +224,7 @@ def main() -> None:
                         "(env: SCHOLAR_CACHE_DIR).")
     p.add_argument("--schema", action="store_true",
                    help="Print this command's parameter schema as JSON and exit")
+    set_command_meta(p, since="0.10.0", tier="write")
     maybe_emit_schema(p, "build_citation_graph")
     args = p.parse_args()
 
