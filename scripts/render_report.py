@@ -385,10 +385,23 @@ def main() -> None:
         help="Lint mode: scan REPORT_PATH for [^id] anchors and verify "
              "each refers to a paper in state.papers. Read-only.",
     )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Render mode only. Overwrite an existing output file. "
+             "Without this, an existing target returns output_exists "
+             "(exit 3) so hand edits in a Phase 7 draft aren't clobbered.",
+    )
     p.add_argument("--schema", action="store_true",
                    help="Print this command's parameter schema as JSON and exit")
     maybe_emit_schema(p, "render_report")
     args = p.parse_args()
+
+    if args.lint and (args.output or args.force):
+        err("inconsistent_input",
+            "--lint is mutually exclusive with --output / --force "
+            "(lint mode never writes). Pick one mode.",
+            retryable=False, exit_code=EXIT_VALIDATION)
 
     state = load_state(Path(args.state))
 
@@ -403,6 +416,13 @@ def main() -> None:
     else:
         slug = _slug(state.get("question") or "report")
         out_path = Path("reports") / f"{slug}_{date.today().strftime('%Y%m%d')}.md"
+    overwrote = out_path.exists()
+    if overwrote and not args.force:
+        err("output_exists",
+            f"Output path already exists: {out_path}. "
+            "Pass --force to overwrite (will not preserve hand edits).",
+            retryable=False, exit_code=EXIT_VALIDATION,
+            path=str(out_path))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text)
 
@@ -410,6 +430,7 @@ def main() -> None:
     ok({
         "output": str(out_path),
         "bytes": len(text.encode("utf-8")),
+        "overwrote_existing": overwrote,
         "anchors_used": len(used),
         "anchors_defined": len(defined),
         "themes": len(state.get("themes") or []),
