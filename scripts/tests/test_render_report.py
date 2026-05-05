@@ -169,19 +169,14 @@ class RenderModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "s.json"
             _state_with_synthesis(state)
-            # Run from tmp so reports/ lands in tmp, not cwd.
-            cwd = tmp
+            # run_script does not chdir, so the default reports/ path
+            # resolves against the test runner's cwd. --force lets the
+            # test be re-runnable when an artifact from a prior run
+            # exists; the assertion is on path *construction*, not
+            # overwrite behavior.
             env = run_script("render_report.py", [
-                "--state", str(state),
-            ], env={
-                "SCHOLAR_STATE_PATH": str(state),
-                "PWD": cwd,
-                "PATH": "/usr/bin:/bin",
-            })
-            # Default path: reports/<slug>_<date>.md, relative to CWD.
-            # Since run_script does not chdir, the default path resolves
-            # against the test runner's cwd. Just verify the envelope
-            # carries a reports/ path with the slug.
+                "--state", str(state), "--force",
+            ])
             self.assertIn("reports/", env["data"]["output"])
             self.assertIn("what-are-the-recent-advances-in",
                           env["data"]["output"])
@@ -270,6 +265,79 @@ class LintModeTest(unittest.TestCase):
                 "--lint", str(Path(tmp) / "no-such-file.md"),
             ], expect_rc=3)
             self.assertEqual(env["error"]["code"], "report_not_found")
+
+
+class OverwriteSafetyTest(unittest.TestCase):
+    """R1 follow-up: render must not silently clobber an existing file."""
+
+    def test_default_refuses_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            _state_with_synthesis(state)
+            out = Path(tmp) / "report.md"
+            out.write_text("USER EDITS — do not lose")
+            env = run_script("render_report.py", [
+                "--state", str(state), "--output", str(out),
+            ], expect_rc=3)
+            self.assertEqual(env["error"]["code"], "output_exists")
+            self.assertEqual(out.read_text(), "USER EDITS — do not lose")
+
+    def test_force_allows_overwrite_and_reports_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            _state_with_synthesis(state)
+            out = Path(tmp) / "report.md"
+            out.write_text("stale")
+            env = run_script("render_report.py", [
+                "--state", str(state), "--output", str(out), "--force",
+            ])
+            self.assertTrue(env["ok"])
+            self.assertTrue(env["data"]["overwrote_existing"])
+            self.assertIn("Literature Review", out.read_text())
+            self.assertNotIn("stale", out.read_text())
+
+    def test_overwrote_existing_false_for_new_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            _state_with_synthesis(state)
+            out = Path(tmp) / "fresh.md"
+            env = run_script("render_report.py", [
+                "--state", str(state), "--output", str(out),
+            ])
+            self.assertTrue(env["ok"])
+            self.assertFalse(env["data"]["overwrote_existing"])
+
+
+class ModeMutexTest(unittest.TestCase):
+    """R2 follow-up: --lint and --output are mutually exclusive."""
+
+    def test_lint_with_output_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            _state_with_synthesis(state)
+            report = Path(tmp) / "report.md"
+            report.write_text("body")
+            out = Path(tmp) / "out.md"
+            env = run_script("render_report.py", [
+                "--state", str(state),
+                "--lint", str(report),
+                "--output", str(out),
+            ], expect_rc=3)
+            self.assertEqual(env["error"]["code"], "inconsistent_input")
+            self.assertFalse(out.exists())
+
+    def test_lint_with_force_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "s.json"
+            _state_with_synthesis(state)
+            report = Path(tmp) / "report.md"
+            report.write_text("body")
+            env = run_script("render_report.py", [
+                "--state", str(state),
+                "--lint", str(report),
+                "--force",
+            ], expect_rc=3)
+            self.assertEqual(env["error"]["code"], "inconsistent_input")
 
 
 if __name__ == "__main__":
