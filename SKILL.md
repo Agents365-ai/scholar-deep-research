@@ -50,19 +50,7 @@ Each phase writes to `research_state.json` before advancing. If the user pauses 
 
 ### Phase 0 — Scope
 
-**Step 0 — Check for skill updates (silent, once per day).** Before anything else, run:
-
-```bash
-python scripts/check_update.py
-```
-
-The script self-throttles to one real check per 24 hours (via a `.last_update_check` timestamp in the skill root); running it every session is cheap. It always exits 0 and never fails the workflow — route on `data.action` only when you need to tell the user something:
-
-- **`updated`** → one line: `[Skill updated: <from> → <to> (<commits_behind> commits). Continuing with new version.]`. If `requirements_changed: true`, append: `Python deps changed — run` `` `pip install -r requirements.txt` `` `before next use.`
-- **`skipped_dirty`** → one line: `[Skill update skipped — you have local changes in <dirty_count> file(s). Review with` `` `cd <skill_root> && git status` `` `.]` so the user knows they're running a stale version on purpose.
-- Everything else (`up_to_date`, `skipped_throttled`, `skipped_disabled`, `not_a_git_repo`, `check_failed`) → continue silently. Don't mention to the user.
-
-Escape hatches: `SCHOLAR_SKIP_UPDATE_CHECK=1` pins the version permanently; `python scripts/check_update.py --force` bypasses the 24h throttle for an immediate check.
+**Step 0 — Check for skill updates (silent, once per day).** Run `python scripts/check_update.py` before anything else. It self-throttles to one real check per 24h, always exits 0, and emits a structured envelope. Only `action=updated` (announce one line; mention `pip install -r requirements.txt` if `requirements_changed`) and `action=skipped_dirty` (user is on a stale version on purpose) need to surface; ignore the rest. `SCHOLAR_SKIP_UPDATE_CHECK=1` pins the version permanently.
 
 Before searching anything, decompose the question.
 
@@ -323,108 +311,13 @@ Templates live in `assets/templates/<archetype>.md`. Load only the one you need.
 
 All scripts accept `--help`, `--schema`, emit a structured JSON envelope on stdout, and use `research_state.json` as the single source of truth. Every script is idempotent on the state file (network-layer idempotency is P1 work).
 
-### CLI contract
+### CLI contract, env vars, and state schema
 
-Every script prints exactly one JSON envelope to stdout and exits with a code from the stable vocabulary below. No prose is ever mixed into stdout; diagnostics go to stderr.
+Three details that agents discover by running scripts and reading the JSON envelopes — kept out of the body to save context. Load on demand:
 
-**Success envelope:**
-
-```json
-{ "ok": true, "data": { ... } }
-```
-
-**Failure envelope:**
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "snake_case_routing_key",
-    "message": "human sentence",
-    "retryable": true,
-    "...extra context fields...": "..."
-  }
-}
-```
-
-**Exit codes:**
-
-| Code | Meaning |
-|------|---------|
-| `0` | success |
-| `1` | runtime error (e.g. malformed upstream response, missing dependency) |
-| `2` | upstream / network error (retryable) |
-| `3` | validation error (bad input) |
-| `4` | state error (missing, corrupt, or schema mismatch) |
-
-**Schema introspection.** Every script supports `--schema`, which prints its full parameter schema (types, defaults, choices, required flags, subcommands where applicable) as JSON and exits 0. An agent discovering an unfamiliar script should run `--schema` before `--help` — it is machine-parseable and covers everything `--help` does.
-
-```bash
-python scripts/search_openalex.py --schema
-python scripts/research_state.py --schema   # includes every subcommand
-```
-
-**Export bibliography exception.** `export_bibtex.py` without `--output` writes raw BibTeX/RIS/CSL text to stdout for pipe compatibility (`export_bibtex.py --format bibtex > refs.bib`). Agents that need a structured response should always pass `--output` — that path returns `{"ok": true, "data": {"output": "...", "format": "bibtex", "count": N}}`.
-
-### Environment variables
-
-Trust-boundary configuration — set once by the human or orchestrator. CLI flags override where present.
-
-| Variable | Used by | Purpose |
-|----------|---------|---------|
-| `SCHOLAR_STATE_PATH` | every script that takes `--state` | Default path to `research_state.json` |
-| `SCHOLAR_MAILTO` | `search_openalex.py`, `search_crossref.py`, `build_citation_graph.py` | Polite-pool email for OpenAlex / Crossref — higher rate limits |
-| `NCBI_API_KEY` | `search_pubmed.py` | NCBI E-utilities API key — higher rate limits |
-| `EXA_API_KEY` | `search_exa.py` | Exa API key — required to enable the open-web search provider |
-| `S2_API_KEY` | `build_citation_graph.py --source s2\|both` | Semantic Scholar API key — raises the public ~1 req/s quota. Optional; without it the S2 backend still works at the lower quota |
-| `SCHOLAR_CACHE_DIR` | `build_citation_graph.py` (any command that takes `--idempotency-key`) | Cache directory for idempotent-retry responses; default `.scholar_cache/` in cwd |
-| `PAPER_FETCH_SCRIPT` | `extract_pdf.py` | Path to paper-fetch's `fetch.py`. If unset, auto-discovers across all known skill install paths (Claude Code, OpenCode, OpenClaw, Hermes, ~/.agents). If not found, falls back to Unpaywall |
-| `SCHOLAR_SKIP_UPDATE_CHECK` | `check_update.py` | Set to any non-empty value to pin the current version and skip Phase 0 Step 0's auto-update |
-
-Agents should never set these themselves. They belong in the shell profile, a systemd unit, or the orchestrator's env injection.
-
-## State file schema (abbreviated)
-
-```json
-{
-  "schema_version": 1,
-  "question": "...",
-  "archetype": "literature_review",
-  "phase": 3,
-  "created_at": "...",
-  "updated_at": "...",
-  "queries": [{"source": "openalex", "query": "...", "hits": 42, "new": 30, "round": 1}],
-  "papers": {
-    "doi:10.1038/nature12373": {
-      "id": "doi:10.1038/nature12373",
-      "title": "...",
-      "authors": ["..."],
-      "year": 2013,
-      "venue": "Nature",
-      "citations": 523,
-      "abstract": "...",
-      "source": ["openalex", "crossref"],
-      "score": 0.81,
-      "score_components": {"relevance": 0.9, "citations": 0.8, "recency": 0.6, "venue": 1.0},
-      "selected": true,
-      "depth": "full",
-      "tier": "deep",
-      "triage_score": 0.74,
-      "triage_components": {"relevance": 0.8, "citation_density": 0.6, "recency": 0.9, "has_pdf": 1.0, "abstract_quality": 1.0},
-      "evidence": {"method": "...", "findings": ["..."], "limitations": "..."},
-      "discovered_via": "search"
-    }
-  },
-  "triage_complete": true,
-  "triage_meta": {"weights": {...}, "deep_ratio": 0.5, "skim_ratio": 0.5, "triaged_at": "..."},
-  "themes": [{"name": "...", "paper_ids": ["..."]}],
-  "tensions": [{"topic": "...", "sides": [{"position": "...", "paper_ids": ["..."]}]}],
-  "self_critique": {"findings": [], "resolved": [], "appendix": "..."},
-  "report_path": "reports/slug_20260411.md"
-}
-```
-
-See `scripts/research_state.py --help` for the full schema.
+- `references/cli_contract.md` — the success/failure envelope shape, exit codes, `--schema` introspection, and idempotency cache semantics.
+- `references/env_vars.md` — the trust-boundary env vars (`SCHOLAR_*`, `NCBI_API_KEY`, `EXA_API_KEY`, `S2_API_KEY`, `PAPER_FETCH_SCRIPT`). Agents should never set these — surface to the user when a script reports a missing one.
+- `references/state_schema.md` — the `research_state.json` shape. Prefer `python scripts/research_state.py --schema` for the live, machine-readable version.
 
 ## Completion gates
 
@@ -473,44 +366,7 @@ If the session has Semantic Scholar (asta) or Brave Search MCP tools available, 
 
 ## Example interaction
 
-```
-User: Give me a deep research report on CRISPR base editing for Duchenne muscular dystrophy.
-
-Agent:
-[Phase 0] Restating: "What is the current state and evidence for CRISPR base editing
-          as a therapeutic approach for Duchenne muscular dystrophy (DMD)?"
-          Archetype: literature_review (default; confirmed — broad overview requested)
-          Clusters:
-            - ("base editing" OR "adenine base editor" OR "cytosine base editor" OR ABE OR CBE)
-            - ("Duchenne muscular dystrophy" OR DMD OR dystrophin)
-            - (in vivo OR AAV OR "muscle delivery")
-          → research_state.json initialized
-
-[Phase 1] Running OpenAlex + PubMed + arXiv + Crossref across 3 clusters...
-          Round 1: 187 hits, 142 unique. Round 2: 94 hits, 31 new.
-          Saturation check: new=11%, max_new_citations=23 → SATURATED
-          143 unique papers in state.
-
-[Phase 2] Ranking with default weights (literature review)...
-          Top 20 selected. Score components written to state.
-
-[Phase 3] Fetching full text... 17/20 full, 3 abstract-only (flagged shallow).
-          Evidence extraction complete.
-
-[Phase 4] Citation chasing on top 8 seeds, depth 1.
-          Added 24 candidates, 6 re-scored into top 20.
-
-[Phase 5] Themes: (a) delivery platforms, (b) editing efficiency, (c) off-target/safety,
-          (d) pre-clinical outcomes, (e) clinical translation barriers.
-          Tensions: AAV serotype optimality (Theme a) — 3 papers disagree.
-
-[Phase 6] Self-critique flagged 2 single-source claims and a recency gap
-          (no 2025 paper in top 20). Re-ran focused search; added 4 papers.
-
-[Phase 7] Rendering literature_review template...
-          Report: reports/crispr-base-editing-dmd_20260411.md
-          Bibliography: reports/crispr-base-editing-dmd_20260411.bib (84 refs)
-```
+A complete walk-through (CRISPR base editing for DMD — Phase 0 question restate through Phase 7 report and bibliography) lives in `references/example_run.md`. Read it once when you want to see what a healthy run looks like end-to-end; it's not load-bearing for routine sessions.
 
 ## References
 
@@ -521,4 +377,8 @@ Modular documentation, loaded only when needed:
 - `references/quality_assessment.md` — CRAAP, journal tier, retraction check, preprint handling
 - `references/report_templates.md` — the 5 archetypes with section-by-section guidance
 - `references/pitfalls.md` — long-form version of the pitfalls list with examples
+- `references/cli_contract.md` — JSON envelope shape, exit codes, `--schema` introspection, idempotency cache
+- `references/env_vars.md` — trust-boundary configuration (SCHOLAR_*, NCBI_API_KEY, EXA_API_KEY, S2_API_KEY, PAPER_FETCH_SCRIPT)
+- `references/state_schema.md` — `research_state.json` shape and ID-normalization rules
+- `references/example_run.md` — full end-to-end example (CRISPR base editing for DMD)
 - `references/agent_prompts/phase3_deep_read.md` — per-paper prompt for parallel agent fan-out in Phase 3
