@@ -190,6 +190,18 @@ Works with Claude Code, Codex, OpenCode, OpenClaw / ClawHub, Hermes Agent, pi-mo
 
 MIT
 
+## Discord
+
+Join the Discord community: [https://discord.gg/pCV3P9hNY](https://discord.gg/pCV3P9hNY)
+
+## WeChat Community
+
+Scan the QR code below to join the WeChat group for help, Q&A, and updates:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Agents365-ai/images_payment/main/qrcode/agents365ai_wechat_1.png" width="200" alt="WeChat Community Group">
+</p>
+
 ## Support
 
 If this skill helps you, consider supporting the author:

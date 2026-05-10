@@ -187,6 +187,18 @@ pip install -r ~/.claude/skills/scholar-deep-research/requirements.txt
 
 MIT
 
+## Discord
+
+加入 Discord 交流（面向海外用户）：[https://discord.gg/pCV3P9hNY](https://discord.gg/pCV3P9hNY)
+
+## 微信交流群
+
+扫描下方二维码加入微信交流群，获取帮助、提问和最新动态：
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Agents365-ai/images_payment/main/qrcode/agents365ai_wechat_1.png" width="200" alt="微信交流群">
+</p>
+
 ## 支持作者
 
 如果这个 skill 对你有帮助，欢迎请作者喝杯咖啡：
