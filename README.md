@@ -143,75 +143,32 @@ Every mutating command (`ingest`, `rank`, `dedupe`, `citation-chase`) accepts `-
 
 No API keys required. For higher OpenAlex / Crossref / PubMed rate limits, pass `--email <you@host>` (polite pool) or `--api-key` (NCBI). All scripts work without these.
 
-### Install — let your agent do it
+### Install
 
-The simplest install is to let your coding agent do it. In **Claude Code**, **OpenAI Codex**, **OpenCode**, **OpenClaw**, **Hermes Agent**, or **pi-mono**, paste:
+```bash
+# Any agent (Claude Code, Cursor, Copilot, etc.)
+npx skills add Agents365-ai/365-skills -g
 
+# Claude Code only
+> /plugin marketplace add Agents365-ai/365-skills
+> /plugin install scholar-deep-research
 ```
-Install https://github.com/Agents365-ai/scholar-deep-research for me, then run pip install -r requirements.txt inside it.
-```
 
-The agent recognizes Agent Skills repos (`SKILL.md` at root), `git clone`s into the right skills directory for whichever platform is hosting it, installs Python deps, and confirms the skill is loaded. Then ask for a research report — the skill triggers automatically.
+Then `pip install -r requirements.txt` inside the install dir to pull in `httpx` + `pypdf`.
 
-### Installation paths
-
-| Platform | Global path | Project path |
-|----------|-------------|--------------|
-| Claude Code | `~/.claude/skills/scholar-deep-research/` | `.claude/skills/scholar-deep-research/` |
-| OpenCode | `~/.config/opencode/skills/scholar-deep-research/` | `.opencode/skills/scholar-deep-research/` |
-| OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
-| Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | Via `external_dirs` config |
-| pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
-| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
-| SkillsMP | `skills install scholar-deep-research` | N/A |
+Also published on [SkillsMP](https://skillsmp.com/) and [ClawHub](https://clawhub.ai/) — each handles updates through its own marketplace.
 
 <details>
-<summary>Manual per-platform commands</summary>
+<summary>Manual install (direct git clone)</summary>
 
-**Claude Code**
 ```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.claude/skills/scholar-deep-research
-# or project-level: .claude/skills/scholar-deep-research
-```
-
-**OpenCode**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.config/opencode/skills/scholar-deep-research
-# or project-level: .opencode/skills/scholar-deep-research
+# Clone the source repo, then symlink the inner skill dir into your platform's skills directory.
+git clone https://github.com/Agents365-ai/scholar-deep-research.git
+ln -s "$PWD/scholar-deep-research/skills/scholar-deep-research" ~/.claude/skills/scholar-deep-research
+pip install -r ~/.claude/skills/scholar-deep-research/requirements.txt
 ```
 
-**OpenClaw / ClawHub**
-```bash
-clawhub install scholar-deep-research
-# or manual: git clone … ~/.openclaw/skills/scholar-deep-research
-```
-
-**Hermes Agent**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.hermes/skills/research/scholar-deep-research
-```
-Or add an external directory in `~/.hermes/config.yaml`:
-```yaml
-skills:
-  external_dirs:
-    - ~/myskills/scholar-deep-research
-```
-
-**pi-mono**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
-```
-
-**OpenAI Codex**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
-# or project-level: .agents/skills/scholar-deep-research
-```
-
-**SkillsMP**
-```bash
-skills install scholar-deep-research
-```
+Replace `~/.claude/skills/` with the appropriate path for your host: `~/.config/opencode/skills/`, `~/.openclaw/skills/`, `~/.hermes/skills/research/`, `~/.pimo/skills/`, or `~/.agents/skills/`.
 
 </details>
 
@@ -250,8 +207,12 @@ With that set, the auto-update check short-circuits and the skill runs exactly t
 **Manual update** (also works as a last resort):
 
 ```bash
-cd ~/.claude/skills/scholar-deep-research   # or your install path
-git pull --ff-only
+# Marketplace install (recommended)
+> /plugin update scholar-deep-research
+
+# Direct git-clone install
+cd <source-repo>/skills/scholar-deep-research
+git -C <source-repo> pull --ff-only
 pip install -r requirements.txt              # only if you see the deps-changed hint
 ```
 
@@ -262,52 +223,54 @@ Users installed through a package manager (ClawHub, SkillsMP, Hermes registry) s
 ### Files
 
 ```
-scholar-deep-research/
-├── SKILL.md                       # Skill instructions (the only required file)
-├── README.md / README_CN.md       # This file / 中文文档
-├── requirements.txt               # httpx, pypdf
-├── agents/
-│   └── openai.yaml                # OpenAI Codex sidecar (interface, capabilities, prereqs)
-├── scripts/
-│   ├── _common.py                 # Envelope, schema, idempotency cache, search-result TTL cache
-│   ├── _gates.py                  # G1..G7 gate predicates for phase advance
-│   ├── _locking.py                # Atomic state writer (single-writer, exclusive lock)
-│   ├── _pdf_fetch.py              # Shared PDF-fetch helper (paper-fetch + Unpaywall fallback)
-│   ├── research_state.py          # Central state file management (init/ingest/advance/query/...)
-│   ├── search_openalex.py         # OpenAlex (primary)
-│   ├── search_arxiv.py            # arXiv preprints
-│   ├── search_crossref.py         # Crossref REST
-│   ├── search_pubmed.py           # NCBI E-utilities
-│   ├── search_dblp.py             # DBLP — CS bibliography gold standard (no abstracts/citations)
-│   ├── search_biorxiv.py          # bioRxiv/medRxiv preprints (via Europe PMC)
-│   ├── search_exa.py              # Exa AI-powered search (optional, key-gated)
-│   ├── dedupe_papers.py           # Cross-source deduplication
-│   ├── rank_papers.py             # Transparent scoring
-│   ├── resolve_id.py              # Read-only paper-ID canonicalizer (DOI/OpenAlex/arXiv/PMID)
-│   ├── skim_papers.py             # Phase-3 tier triage (deep/skim/defer)
-│   ├── prefetch_pdfs.py           # Pull deep-tier PDFs ahead of agent fan-out (concurrent)
-│   ├── build_citation_graph.py    # Forward + backward snowball
-│   ├── extract_pdf.py             # PDF extraction with DOI resolution (paper-fetch / Unpaywall)
-│   ├── export_bibtex.py           # BibTeX / CSL-JSON / RIS
-│   ├── check_update.py            # 24h-throttled fast-forward of the skill itself
-│   └── tests/                     # 148-test smoke suite (stdlib only, no network)
-├── references/                    # Progressive-disclosure resources (loaded on demand)
-│   ├── search_strategies.md       # Boolean, PICO, snowballing, saturation
-│   ├── source_selection.md        # Which database for which question
-│   ├── quality_assessment.md      # CRAAP, tier, retraction, preprints
-│   ├── report_templates.md        # Archetype selection guide
-│   ├── pitfalls.md                # 14 failure modes with fixes
-│   └── agent_prompts/
-│       └── phase3_deep_read.md    # Per-paper prompt for parallel agent fan-out
-└── assets/
-    ├── templates/                 # Per-archetype report skeletons
-    │   ├── literature_review.md
-    │   ├── systematic_review.md
-    │   ├── scoping_review.md
-    │   ├── comparative_analysis.md
-    │   └── grant_background.md
-    └── prompts/
-        └── self_critique.md       # 14-point Phase 6 checklist
+scholar-deep-research/                      # Source repository
+├── README.md / README_CN.md                # This file / 中文文档
+├── .github/workflows/sync-365-skills.yml   # Mirrors skills/ into Agents365-ai/365-skills
+└── skills/scholar-deep-research/           # The shipped plugin (everything below)
+    ├── SKILL.md                            # Skill instructions (the only required file)
+    ├── requirements.txt                    # httpx, pypdf
+    ├── agents/
+    │   └── openai.yaml                     # OpenAI Codex sidecar (interface, capabilities, prereqs)
+    ├── scripts/
+    │   ├── _common.py                      # Envelope, schema, idempotency cache, search-result TTL cache
+    │   ├── _gates.py                       # G1..G7 gate predicates for phase advance
+    │   ├── _locking.py                     # Atomic state writer (single-writer, exclusive lock)
+    │   ├── _pdf_fetch.py                   # Shared PDF-fetch helper (paper-fetch + Unpaywall fallback)
+    │   ├── research_state.py               # Central state file management (init/ingest/advance/query/...)
+    │   ├── search_openalex.py              # OpenAlex (primary)
+    │   ├── search_arxiv.py                 # arXiv preprints
+    │   ├── search_crossref.py              # Crossref REST
+    │   ├── search_pubmed.py                # NCBI E-utilities
+    │   ├── search_dblp.py                  # DBLP — CS bibliography gold standard (no abstracts/citations)
+    │   ├── search_biorxiv.py               # bioRxiv/medRxiv preprints (via Europe PMC)
+    │   ├── search_exa.py                   # Exa AI-powered search (optional, key-gated)
+    │   ├── dedupe_papers.py                # Cross-source deduplication
+    │   ├── rank_papers.py                  # Transparent scoring
+    │   ├── resolve_id.py                   # Read-only paper-ID canonicalizer (DOI/OpenAlex/arXiv/PMID)
+    │   ├── skim_papers.py                  # Phase-3 tier triage (deep/skim/defer)
+    │   ├── prefetch_pdfs.py                # Pull deep-tier PDFs ahead of agent fan-out (concurrent)
+    │   ├── build_citation_graph.py         # Forward + backward snowball
+    │   ├── extract_pdf.py                  # PDF extraction with DOI resolution (paper-fetch / Unpaywall)
+    │   ├── export_bibtex.py                # BibTeX / CSL-JSON / RIS
+    │   ├── check_update.py                 # 24h-throttled fast-forward of the skill itself
+    │   └── tests/                          # 148-test smoke suite (stdlib only, no network)
+    ├── references/                         # Progressive-disclosure resources (loaded on demand)
+    │   ├── search_strategies.md            # Boolean, PICO, snowballing, saturation
+    │   ├── source_selection.md             # Which database for which question
+    │   ├── quality_assessment.md           # CRAAP, tier, retraction, preprints
+    │   ├── report_templates.md             # Archetype selection guide
+    │   ├── pitfalls.md                     # 14 failure modes with fixes
+    │   └── agent_prompts/
+    │       └── phase3_deep_read.md         # Per-paper prompt for parallel agent fan-out
+    └── assets/
+        ├── templates/                      # Per-archetype report skeletons
+        │   ├── literature_review.md
+        │   ├── systematic_review.md
+        │   ├── scoping_review.md
+        │   ├── comparative_analysis.md
+        │   └── grant_background.md
+        └── prompts/
+            └── self_critique.md            # 14-point Phase 6 checklist
 ```
 
 > Only `SKILL.md` and `scripts/` are required for the skill to work. `references/` and `assets/` are progressive-disclosure resources the model loads on demand.

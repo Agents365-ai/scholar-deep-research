@@ -140,75 +140,32 @@ flowchart LR
 
 无需 API key。如需更高的 OpenAlex / Crossref / PubMed 限流，可加 `--email <你@主机>`（礼貌池）或 `--api-key`（NCBI），但所有脚本不带这些参数也能正常工作。
 
-### 安装——让 agent 帮你装
+### 安装
 
-最简便的安装方式是让你的编码 agent 帮忙。在 **Claude Code**、**OpenAI Codex**、**OpenCode**、**OpenClaw**、**Hermes Agent** 或 **pi-mono** 中，粘贴：
+```bash
+# 任意 agent（Claude Code、Cursor、Copilot 等）
+npx skills add Agents365-ai/365-skills -g
 
+# 仅 Claude Code
+> /plugin marketplace add Agents365-ai/365-skills
+> /plugin install scholar-deep-research
 ```
-请帮我安装 https://github.com/Agents365-ai/scholar-deep-research，然后在该目录下运行 pip install -r requirements.txt。
-```
 
-agent 会识别这是 Agent Skills 仓库（根目录有 `SKILL.md`），`git clone` 到对应宿主平台正确的 skills 目录，安装 Python 依赖，并确认 skill 已加载。之后你直接提研究需求，skill 会自动触发。
+随后在安装目录下执行 `pip install -r requirements.txt`，安装 `httpx` + `pypdf`。
 
-### 安装路径
-
-| 平台 | 全局安装路径 | 项目级安装路径 |
-|------|-------------|----------------|
-| Claude Code | `~/.claude/skills/scholar-deep-research/` | `.claude/skills/scholar-deep-research/` |
-| OpenCode | `~/.config/opencode/skills/scholar-deep-research/` | `.opencode/skills/scholar-deep-research/` |
-| OpenClaw / ClawHub | `~/.openclaw/skills/scholar-deep-research/` | `skills/scholar-deep-research/` |
-| Hermes Agent | `~/.hermes/skills/research/scholar-deep-research/` | 通过 `external_dirs` 配置 |
-| pi-mono | `~/.pimo/skills/scholar-deep-research/` | — |
-| OpenAI Codex | `~/.agents/skills/scholar-deep-research/` | `.agents/skills/scholar-deep-research/` |
-| SkillsMP | `skills install scholar-deep-research` | 不适用 |
+也已发布到 [SkillsMP](https://skillsmp.com/) 与 [ClawHub](https://clawhub.ai/)，各自的市场负责升级。
 
 <details>
-<summary>各平台手动安装命令</summary>
+<summary>手动安装（直接 git clone）</summary>
 
-**Claude Code**
 ```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.claude/skills/scholar-deep-research
-# 项目级：.claude/skills/scholar-deep-research
-```
-
-**OpenCode**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.config/opencode/skills/scholar-deep-research
-# 项目级：.opencode/skills/scholar-deep-research
+# 克隆源仓库后，将内层 skill 目录软链到对应宿主平台的 skills 目录
+git clone https://github.com/Agents365-ai/scholar-deep-research.git
+ln -s "$PWD/scholar-deep-research/skills/scholar-deep-research" ~/.claude/skills/scholar-deep-research
+pip install -r ~/.claude/skills/scholar-deep-research/requirements.txt
 ```
 
-**OpenClaw / ClawHub**
-```bash
-clawhub install scholar-deep-research
-# 或手动：git clone … ~/.openclaw/skills/scholar-deep-research
-```
-
-**Hermes Agent**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.hermes/skills/research/scholar-deep-research
-```
-或在 `~/.hermes/config.yaml` 添加外部目录：
-```yaml
-skills:
-  external_dirs:
-    - ~/myskills/scholar-deep-research
-```
-
-**pi-mono**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.pimo/skills/scholar-deep-research
-```
-
-**OpenAI Codex**
-```bash
-git clone https://github.com/Agents365-ai/scholar-deep-research.git ~/.agents/skills/scholar-deep-research
-# 项目级：.agents/skills/scholar-deep-research
-```
-
-**SkillsMP**
-```bash
-skills install scholar-deep-research
-```
+将 `~/.claude/skills/` 替换为你的宿主平台对应路径：`~/.config/opencode/skills/`、`~/.openclaw/skills/`、`~/.hermes/skills/research/`、`~/.pimo/skills/` 或 `~/.agents/skills/`。
 
 </details>
 
@@ -247,8 +204,12 @@ export SCHOLAR_SKIP_UPDATE_CHECK=1
 **手动升级**(也是兜底方案):
 
 ```bash
-cd ~/.claude/skills/scholar-deep-research   # 或你的安装路径
-git pull --ff-only
+# 市场安装（推荐）
+> /plugin update scholar-deep-research
+
+# 直接 git-clone 安装
+cd <源仓库>/skills/scholar-deep-research
+git -C <源仓库> pull --ff-only
 pip install -r requirements.txt              # 仅当看到依赖变化提示时
 ```
 
@@ -259,52 +220,54 @@ pip install -r requirements.txt              # 仅当看到依赖变化提示时
 ### 文件结构
 
 ```
-scholar-deep-research/
-├── SKILL.md                       # Skill 指令（唯一必需文件）
-├── README.md / README_CN.md       # 英文文档 / 本文件
-├── requirements.txt               # httpx, pypdf
-├── agents/
-│   └── openai.yaml                # OpenAI Codex 侧车文件（接口、能力、前置条件）
-├── scripts/
-│   ├── _common.py                 # 信封、schema、幂等缓存、检索结果 TTL 缓存
-│   ├── _gates.py                  # G1..G7 阶段推进门控谓词
-│   ├── _locking.py                # 状态文件原子写入器（单写者，独占锁）
-│   ├── _pdf_fetch.py              # 共享 PDF 抓取 helper（paper-fetch + Unpaywall 兜底）
-│   ├── research_state.py          # 状态文件管理（init/ingest/advance/query/...）
-│   ├── search_openalex.py         # OpenAlex（主源）
-│   ├── search_arxiv.py            # arXiv 预印本
-│   ├── search_crossref.py         # Crossref REST
-│   ├── search_pubmed.py           # NCBI E-utilities
-│   ├── search_dblp.py             # DBLP — 计算机科学权威书目（无摘要/无引用数）
-│   ├── search_biorxiv.py          # bioRxiv/medRxiv 预印本（经 Europe PMC 检索）
-│   ├── search_exa.py              # Exa AI 检索（可选，需 API key）
-│   ├── dedupe_papers.py           # 跨源去重
-│   ├── rank_papers.py             # 透明打分
-│   ├── resolve_id.py              # 只读论文 ID 规范化（DOI/OpenAlex/arXiv/PMID）
-│   ├── skim_papers.py             # Phase 3 分档 triage（deep / skim / defer）
-│   ├── prefetch_pdfs.py           # 派发前并发预取 deep 档 PDF
-│   ├── build_citation_graph.py    # 正向 + 反向滚雪球
-│   ├── extract_pdf.py             # PDF 提取 + DOI 解析（paper-fetch / Unpaywall）
-│   ├── export_bibtex.py           # BibTeX / CSL-JSON / RIS
-│   ├── check_update.py            # 24 小时节流的 skill 自身快进升级
-│   └── tests/                     # 148 项冒烟测试套件（仅标准库，无网络）
-├── references/                    # 按需加载的渐进式资源
-│   ├── search_strategies.md       # 布尔、PICO、滚雪球、饱和度
-│   ├── source_selection.md        # 哪个数据库适合哪类问题
-│   ├── quality_assessment.md      # CRAAP、期刊层级、撤稿、预印本
-│   ├── report_templates.md        # 原型选择指南
-│   ├── pitfalls.md                # 14 类失败模式与修复
-│   └── agent_prompts/
-│       └── phase3_deep_read.md    # Phase 3 并行 agent 派发的逐篇 prompt 模板
-└── assets/
-    ├── templates/                 # 各原型报告骨架
-    │   ├── literature_review.md
-    │   ├── systematic_review.md
-    │   ├── scoping_review.md
-    │   ├── comparative_analysis.md
-    │   └── grant_background.md
-    └── prompts/
-        └── self_critique.md       # Phase 6 的 14 项检查清单
+scholar-deep-research/                      # 源仓库
+├── README.md / README_CN.md                # 英文文档 / 本文件
+├── .github/workflows/sync-365-skills.yml   # 把 skills/ 同步到 Agents365-ai/365-skills
+└── skills/scholar-deep-research/           # 实际发布的 plugin（以下全部）
+    ├── SKILL.md                            # Skill 指令（唯一必需文件）
+    ├── requirements.txt                    # httpx, pypdf
+    ├── agents/
+    │   └── openai.yaml                     # OpenAI Codex 侧车文件（接口、能力、前置条件）
+    ├── scripts/
+    │   ├── _common.py                      # 信封、schema、幂等缓存、检索结果 TTL 缓存
+    │   ├── _gates.py                       # G1..G7 阶段推进门控谓词
+    │   ├── _locking.py                     # 状态文件原子写入器（单写者，独占锁）
+    │   ├── _pdf_fetch.py                   # 共享 PDF 抓取 helper（paper-fetch + Unpaywall 兜底）
+    │   ├── research_state.py               # 状态文件管理（init/ingest/advance/query/...）
+    │   ├── search_openalex.py              # OpenAlex（主源）
+    │   ├── search_arxiv.py                 # arXiv 预印本
+    │   ├── search_crossref.py              # Crossref REST
+    │   ├── search_pubmed.py                # NCBI E-utilities
+    │   ├── search_dblp.py                  # DBLP — 计算机科学权威书目（无摘要/无引用数）
+    │   ├── search_biorxiv.py               # bioRxiv/medRxiv 预印本（经 Europe PMC 检索）
+    │   ├── search_exa.py                   # Exa AI 检索（可选，需 API key）
+    │   ├── dedupe_papers.py                # 跨源去重
+    │   ├── rank_papers.py                  # 透明打分
+    │   ├── resolve_id.py                   # 只读论文 ID 规范化（DOI/OpenAlex/arXiv/PMID）
+    │   ├── skim_papers.py                  # Phase 3 分档 triage（deep / skim / defer）
+    │   ├── prefetch_pdfs.py                # 派发前并发预取 deep 档 PDF
+    │   ├── build_citation_graph.py         # 正向 + 反向滚雪球
+    │   ├── extract_pdf.py                  # PDF 提取 + DOI 解析（paper-fetch / Unpaywall）
+    │   ├── export_bibtex.py                # BibTeX / CSL-JSON / RIS
+    │   ├── check_update.py                 # 24 小时节流的 skill 自身快进升级
+    │   └── tests/                          # 148 项冒烟测试套件（仅标准库，无网络）
+    ├── references/                         # 按需加载的渐进式资源
+    │   ├── search_strategies.md            # 布尔、PICO、滚雪球、饱和度
+    │   ├── source_selection.md             # 哪个数据库适合哪类问题
+    │   ├── quality_assessment.md           # CRAAP、期刊层级、撤稿、预印本
+    │   ├── report_templates.md             # 原型选择指南
+    │   ├── pitfalls.md                     # 14 类失败模式与修复
+    │   └── agent_prompts/
+    │       └── phase3_deep_read.md         # Phase 3 并行 agent 派发的逐篇 prompt 模板
+    └── assets/
+        ├── templates/                      # 各原型报告骨架
+        │   ├── literature_review.md
+        │   ├── systematic_review.md
+        │   ├── scoping_review.md
+        │   ├── comparative_analysis.md
+        │   └── grant_background.md
+        └── prompts/
+            └── self_critique.md            # Phase 6 的 14 项检查清单
 ```
 
 > 仅 `SKILL.md` 与 `scripts/` 是 skill 运行的必需部分。`references/` 与 `assets/` 是按需加载的渐进式资源。
