@@ -42,3 +42,20 @@
 输出：`reports/<slug>_<YYYYMMDD>.md`，并附带同名 `.bib`。
 
 每个阶段跃迁都通过 `python scripts/research_state.py advance` 进行，该命令执行门控谓词，不满足时返回结构化的 `gate_not_met` 信封（列出失败的检查项**并**给出建议下一步命令）。无法通过直接设置 `phase` 绕过门控。Phase 6 自我批判如果发现覆盖不足，会回到 Phase 1 补检索；其余阶段是线性的。
+
+## 美观 HTML 交付（可选）
+
+pipeline 在 markdown 终止——这是 `render_report.py --lint` 校验的契约。要做可分享的 HTML 页面，把产物交给宿主 coding agent：
+
+```
+把 reports/crispr-base-editing-dmd_20260411.md 和同名 .bib 渲染成一个
+可以发给 PI 的单文件 HTML 页面：
+- 衬线正文（Charter / Source Serif），~70ch 阅读栏宽，无衬线标题
+- 侧边 TOC，滚动时 sticky
+- 引用悬浮：鼠标停在 [^id] 上显示对应 bib 条目
+- Phase 6 自我批判附录折叠为 <details>
+- @media print 打印样式
+- 全部内联——不依赖 CDN
+```
+
+coding agent 非常擅长手写有品味的 HTML/CSS 来交付一次性产物。把这部分留在 skill 契约之外，可以让 skill 专注于它真正擅长的事（引用严谨、饱和度、自我批判），同时让 HTML 形态可以按报告主题定制。

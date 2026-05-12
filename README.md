@@ -22,6 +22,7 @@ Works with Claude Code, Cursor, Codex, OpenCode, OpenClaw / ClawHub, Hermes Agen
 | Citation rigor | Every claim carries a `[^id]` anchor; unanchored prose fails the gate |
 | 5 archetype templates | `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background` |
 | BibTeX / CSL-JSON / RIS export | Bibliography generated from state, never retyped |
+| Markdown report + agent-rendered HTML | Pipeline outputs `reports/<slug>_<YYYYMMDD>.md` + `.bib`; hand it to your coding agent for a polished HTML delivery page |
 
 ## How it works (1-line per phase)
 

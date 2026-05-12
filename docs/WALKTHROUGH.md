@@ -45,3 +45,20 @@ Run a deep research report on CRISPR base editing for Duchenne muscular dystroph
 Output: `reports/<slug>_<YYYYMMDD>.md` plus a matching `.bib`.
 
 Every phase transition runs through `python scripts/research_state.py advance`, which executes the gate predicate and refuses with a structured `gate_not_met` envelope (listing failing checks **and** suggested next commands) when criteria aren't met. There is no way to skip a gate by setting `phase` directly. Phase 6 (self-critique) can loop back to Phase 1 when it finds gaps; everything else is linear.
+
+## Polished HTML delivery (optional)
+
+The pipeline stops at markdown — it's the contract `render_report.py --lint` validates. For a shareable HTML page, hand the artifacts to your host coding agent:
+
+```
+Take reports/crispr-base-editing-dmd_20260411.md and the matching .bib,
+and render a polished single-file HTML page suitable for sharing with my PI:
+- Serif body (Charter / Source Serif), ~70ch reading column, sans-serif headings
+- Sidebar TOC, sticky on scroll
+- Citation hovers: hovering [^id] shows the bib entry inline
+- Phase 6 self-critique appendix folded into a <details> block
+- Print-friendly @media print rules
+- All inline — no CDN dependencies
+```
+
+Coding agents are very good at hand-rolling tasteful HTML/CSS for a one-off artifact. Keeping it outside the skill's contract means the skill stays narrow (citation rigor, saturation, self-critique) and the presentation can be tailored per report.

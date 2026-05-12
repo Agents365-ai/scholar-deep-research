@@ -22,6 +22,7 @@
 | 引用严谨 | 每条非平凡论断必须带 `[^id]` 锚点，无锚点不通过门控 |
 | 5 种报告原型 | `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background` |
 | BibTeX / CSL-JSON / RIS 导出 | 参考文献从 state 生成，无需重打 |
+| Markdown 报告 + Agent 渲染 HTML | pipeline 产物 `reports/<slug>_<YYYYMMDD>.md` + `.bib`；HTML 交付页面交由宿主 coding agent 按需渲染 |
 
 ## 工作流（每阶段一句话）
 
