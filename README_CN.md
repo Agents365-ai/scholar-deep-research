@@ -8,17 +8,6 @@
 
 支持 Claude Code、Cursor、Codex、OpenCode、OpenClaw / ClawHub、Hermes Agent、pi-mono、SkillsMP — 任何兼容 [Agent Skills](https://agentskills.io) 格式的 agent。
 
-## 文档
-
-| 文档 | 内容 |
-|---|---|
-| [docs/WALKTHROUGH_CN.md](docs/WALKTHROUGH_CN.md) | 完整 CRISPR 碱基编辑示例，逐阶段展示 |
-| [docs/ARCHITECTURE_CN.md](docs/ARCHITECTURE_CN.md) | 8 阶段、门控、状态模型、幂等、CLI 契约、MCP/WebFetch 边界 |
-| [docs/COMPARISON_CN.md](docs/COMPARISON_CN.md) | 与原生 agent 对比能力表 |
-| [docs/INSTALL_CN.md](docs/INSTALL_CN.md) | 插件市场、手动 clone、跨平台路径、环境变量 |
-| [docs/LIMITATIONS_CN.md](docs/LIMITATIONS_CN.md) | 覆盖范围、引用计数缺口、语言偏倚、饱和度语义 |
-| [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | 宿主 LLM 读的工作流指引 |
-
 ## 能力概览
 
 | 能力 | 细节 |
@@ -69,6 +58,17 @@ npx skills add Agents365-ai/365-skills -g
 ```
 
 skill 自动走完 8 个阶段，把报告写到 `reports/<slug>_<YYYYMMDD>.md` 并附带同名 `.bib`。完整示例见 [docs/WALKTHROUGH_CN.md](docs/WALKTHROUGH_CN.md)。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [docs/WALKTHROUGH_CN.md](docs/WALKTHROUGH_CN.md) | 完整 CRISPR 碱基编辑示例，逐阶段展示 |
+| [docs/ARCHITECTURE_CN.md](docs/ARCHITECTURE_CN.md) | 8 阶段、门控、状态模型、幂等、CLI 契约、MCP/WebFetch 边界 |
+| [docs/COMPARISON_CN.md](docs/COMPARISON_CN.md) | 与原生 agent 对比能力表 |
+| [docs/INSTALL_CN.md](docs/INSTALL_CN.md) | 插件市场、手动 clone、跨平台路径、环境变量 |
+| [docs/LIMITATIONS_CN.md](docs/LIMITATIONS_CN.md) | 覆盖范围、引用计数缺口、语言偏倚、饱和度语义 |
+| [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | 宿主 LLM 读的工作流指引 |
 
 ## 社群
 

@@ -8,17 +8,6 @@ An 8-phase (Phase 0..7), script-driven academic research workflow that turns a r
 
 Works with Claude Code, Cursor, Codex, OpenCode, OpenClaw / ClawHub, Hermes Agent, pi-mono, and SkillsMP — any agent that supports the [Agent Skills](https://agentskills.io) format.
 
-## Documentation
-
-| Doc | What's inside |
-|---|---|
-| [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) | Concrete CRISPR-base-editing run, phase by phase |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 8 phases, gates, state model, idempotency, CLI contract, MCP/WebFetch boundary |
-| [docs/COMPARISON.md](docs/COMPARISON.md) | Side-by-side capability table vs. native agents |
-| [docs/INSTALL.md](docs/INSTALL.md) | Plugin marketplace, manual clone, multi-platform paths, env vars |
-| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Coverage caveats, citation-count gaps, language bias, saturation semantics |
-| [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | The workflow guide the host LLM reads |
-
 ## What it does
 
 | Capability | Detail |
@@ -69,6 +58,17 @@ Run a deep research report on CRISPR base editing for Duchenne muscular dystroph
 ```
 
 The skill walks the 8 phases automatically and writes the report to `reports/<slug>_<YYYYMMDD>.md` with a matching `.bib`. See [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) for a complete example.
+
+## Documentation
+
+| Doc | What's inside |
+|---|---|
+| [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) | Concrete CRISPR-base-editing run, phase by phase |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 8 phases, gates, state model, idempotency, CLI contract, MCP/WebFetch boundary |
+| [docs/COMPARISON.md](docs/COMPARISON.md) | Side-by-side capability table vs. native agents |
+| [docs/INSTALL.md](docs/INSTALL.md) | Plugin marketplace, manual clone, multi-platform paths, env vars |
+| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Coverage caveats, citation-count gaps, language bias, saturation semantics |
+| [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | The workflow guide the host LLM reads |
 
 ## Community
 
