@@ -1,0 +1,14 @@
+{
+  "method": "full text PDF (arxiv 2312.00752, 156KB extracted text)",
+  "findings": [
+    "Mamba is a selective state-space architecture: SSM parameters (Δ, B, C) are functions of input, breaking time-invariance and enabling content-based selection",
+    "Linear scaling in sequence length vs Transformer quadratic; hardware-aware scan algorithm avoids materializing the expanded state, runs up to 3× faster than prior SSM on A100",
+    "5× higher inference throughput than Transformers of similar size due to constant-time-per-step autoregressive unrolling (no KV cache)",
+    "Mamba-3B matches Transformer-7B quality on common-sense reasoning (e.g. 4 points higher avg vs Pythia-3B and exceeds Pythia-7B); first linear-time model to truly match Transformer pretraining perplexity",
+    "Performance keeps improving with longer context up to 1M-token sequences on real data",
+    "Solves synthetic tasks like selective copy and induction heads that prior SSM variants fail; can extrapolate to >1M tokens"
+  ],
+  "limitations": "Pure Mamba shows weaker in-context retrieval than attention (later Jamba paper confirms); evaluated up to 1B params at the time of release — scaling-law extrapolations beyond not yet tested in this paper.",
+  "relevance": "Core comparative claim. Direct head-to-head Mamba vs Transformer on language modeling at matched parameter scale.",
+  "depth": "full"
+}

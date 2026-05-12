@@ -16,3 +16,13 @@ docs/competitor-analysis/landscape.md
 docs/competitor-analysis/suggestions.md
 docs/competitor-analysis/progress.md
 docs/superpowers/
+
+# Skill-internal runtime artifacts (lock files from fcntl)
+*.json.lock
+
+# Showcase example runs are tracked even though they share file names
+# with runtime defaults (research_state.json / reports/ / *.bib).
+!examples/**/research_state.json
+!examples/**/reports/
+!examples/**/reports/**
+!examples/**/*.bib

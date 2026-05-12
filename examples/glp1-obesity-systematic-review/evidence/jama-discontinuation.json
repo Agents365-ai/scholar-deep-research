@@ -1,0 +1,14 @@
+{
+  "method": "evidence_unavailable: oa_paywall — extracted from PubMed/Crossref structured abstract.",
+  "findings": [
+    "Design: retrospective cohort, EHR-based (collective of US health systems), 125,474 adults, BMI ≥27, dual-labeled GLP-1RA initiators (liraglutide/semaglutide/tirzepatide), Jan-2018 to Dec-2023.",
+    "Stratified by T2D status at baseline: 76,524 (61.0%) had T2D; 48,950 did not.",
+    "1-year discontinuation: 64.8% in non-diabetic (CI 64.4–65.2%) vs 46.5% in T2D (CI 46.2–46.9%) — adherence is far worse for non-diabetic indication.",
+    "1-year reinitiation (among those who discontinued): 36.3% in non-diabetic (CI 35.6–37.0%) vs 47.3% in T2D (CI 46.6–48.0%).",
+    "Weight loss reduces discontinuation: 1% weight loss → 3.3% lower hazard of discontinuation in non-diabetic (CI 3.2–3.5%).",
+    "Moderate/severe GI AEs increase discontinuation: HR 1.19 in non-diabetic (CI 1.12–1.27).",
+    "Weight regain after stopping drives reinitiation: 1% regain → 2.8% higher reinitiation hazard in non-diabetic (CI 2.4–3.2%)."
+  ],
+  "limitations": "Retrospective EHR design — confounding by indication, severity, and access. US-only. Discontinuation reasons not always recorded in EHR; reliance on Kaplan-Meier/Cox assumes informative censoring is rare. Reinitiation depends on weight-measurement availability (selection effect).",
+  "relevance": "Critical real-world adherence finding directly relevant to non-diabetic use. RCT efficacy (Annals 2025: 14–18% loss) does not translate to non-diabetic real-world durability — 65% discontinue within a year. Frames the durability-of-benefit tension that anchors much of the synthesis."
+}

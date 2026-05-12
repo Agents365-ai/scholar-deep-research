@@ -1,0 +1,13 @@
+{
+  "method": "full text PDF (arxiv 2405.04517, 158KB extracted text)",
+  "findings": [
+    "xLSTM extends classic LSTM with two new cell variants: sLSTM (scalar memory, exponential gating, new memory mixing) and mLSTM (matrix memory, covariance update, fully parallelizable training)",
+    "Exponential gating addresses LSTM's inability to revise stored values when a more similar token appears later (the rare-token / nearest-neighbour-search failure mode)",
+    "mLSTM gains parallel training comparable to Transformer/Mamba while keeping recurrent constant-time inference",
+    "Reports favorable performance vs state-of-the-art Transformers AND Mamba at matched scale on both perplexity and scaling-law extrapolations — a third pole in the architecture comparison beyond just Mamba vs Transformer",
+    "Authored by Hochreiter (original LSTM author) and lab — a credibility signal for the recurrent revival narrative"
+  ],
+  "limitations": "Public reproductions of xLSTM scaling-law claims are still emerging; the paper's matched-compute comparison protocol differs slightly from Mamba's, complicating direct head-to-head numbers across the three architectures.",
+  "relevance": "Important third architecture in the comparative space — expands the question from \"Mamba vs Transformer\" to \"recurrent revival (Mamba, xLSTM, RWKV) vs Transformer\".",
+  "depth": "full"
+}

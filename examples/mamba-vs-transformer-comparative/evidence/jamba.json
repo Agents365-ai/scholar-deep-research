@@ -1,0 +1,14 @@
+{
+  "method": "full text PDF (arxiv 2403.19887, 48KB extracted text)",
+  "findings": [
+    "Jamba is a hybrid Transformer-Mamba-MoE architecture: interleaves Transformer and Mamba blocks at a tunable ratio (released config: 1:7 attention:mamba)",
+    "Combines benefits: Transformer in-context retrieval + Mamba's linear-in-length throughput and small memory footprint",
+    "Fits a 12B-active / 52B-total MoE model in a single 80GB GPU; supports 256K-token context with strong long-context evaluation results",
+    "Outperforms vanilla Transformer on standard LM benchmarks AND long-context evaluations at matched compute",
+    "Confirms a key tradeoff: pure Mamba still lags pure attention on certain retrieval-heavy tasks at matched scale; the hybrid recovers retrieval quality while keeping throughput",
+    "Cites first production-grade Attention-SSM hybrid; releases checkpoints + ablations"
+  ],
+  "limitations": "Ablations show hybrid ratio matters — too few attention layers hurts retrieval, too many erodes throughput benefits. Single-vendor release (AI21); independent reproductions still maturing.",
+  "relevance": "Direct comparative evidence: pure-Mamba vs pure-Transformer vs hybrid on identical benchmarks. Strong support for the hybrid synthesis position.",
+  "depth": "full"
+}

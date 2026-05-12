@@ -1,0 +1,14 @@
+{
+  "method": "evidence_unavailable: oa_paywall — full text retrieval failed via Unpaywall/S2/sci-hub. Evidence extracted from PubMed structured abstract.",
+  "findings": [
+    "Population: adults with type 2 diabetes (T2D), not non-diabetic — limits direct applicability to this review's PICO but establishes the GLP-1 class-effect baseline.",
+    "Design: systematic review + network meta-analysis (NMA). PROSPERO CRD42022342845.",
+    "Search: PubMed, Web of Science, CENTRAL, Embase to 2023-08-19; ≥12-week RCTs.",
+    "Glycaemic outcome: tirzepatide ranked most effective for HbA1c reduction (mean diff −2.10%, 95% CI −2.47 to −1.74; SUCRA 94.2%) — high-confidence evidence.",
+    "Weight outcomes (despite T2D context): CagriSema (semaglutide+cagrilintide) −14.03 kg (CI −17.05 to −11.00); tirzepatide −8.47 kg (CI −9.68 to −7.26) — both high-confidence.",
+    "Semaglutide reduced LDL-C −0.16 mmol/L (CI −0.30 to −0.02) and total cholesterol −0.48 mmol/L (CI −0.84 to −0.11).",
+    "Safety: gastrointestinal AEs are the dominant signal across the class; concern especially at high-dose."
+  ],
+  "limitations": "T2D population — direct generalization to non-diabetic obesity requires caution. Network meta-analysis assumes transitivity which the authors note may not fully hold across the heterogeneous trial set.",
+  "relevance": "Class-effect anchor: establishes that within the GLP-1RA class, dual-mechanism (tirzepatide/CagriSema) > pure GLP-1 for weight loss. Useful as comparator backdrop for non-diabetic-specific Annals 2025 numbers."
+}

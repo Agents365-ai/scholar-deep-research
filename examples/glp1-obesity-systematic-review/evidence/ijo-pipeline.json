@@ -1,0 +1,14 @@
+{
+  "method": "evidence_unavailable: oa_paywall — extracted from Nature/IJO structured abstract.",
+  "findings": [
+    "Design: narrative review of obesity pharmacotherapy pipeline, focused on entero-pancreatic-hormone-based agents.",
+    "Semaglutide 2.4 mg/wk: 15–17% mean weight loss (WL) with evidence of cardioprotection (SELECT trial reference).",
+    "Tirzepatide (dual GLP-1/GIP): up to 22.5% WL in phase 3 obesity trials.",
+    "Pipeline: cagrisema (GLP-1/amylin), retatrutide (GLP-1/GIP/glucagon triple) — phase 3 — preliminary data suggests WL exceeding tirzepatide.",
+    "Oral GLP-1 RAs under development with early data showing similar WL to subcutaneous semaglutide 2.4 mg.",
+    "Non-hormone agents (e.g. bimagrumab) in early-phase trials targeting body composition during WL.",
+    "Framing: combinations of entero-pancreatic hormones now approach bariatric-surgery WL magnitudes."
+  ],
+  "limitations": "Narrative review — no systematic search documented; selection bias possible. Most pipeline numbers from press releases or early trial readouts subject to revision at peer review.",
+  "relevance": "Provides the forward-looking pipeline context — what's after semaglutide/tirzepatide for adults without diabetes (cagrisema, retatrutide, oral GLP-1s). Useful for the gap-and-direction section of the report."
+}

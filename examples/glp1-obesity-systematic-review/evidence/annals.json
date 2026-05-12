@@ -1,0 +1,15 @@
+{
+  "method": "evidence_unavailable: oa_paywall — Unpaywall, Semantic Scholar OA, and sci-hub all returned 404. Evidence below extracted from PubMed/Crossref structured abstract (BACKGROUND/PURPOSE/DATA SOURCES/RESULTS/CONCLUSION).",
+  "findings": [
+    "Population: placebo-controlled RCTs in otherwise healthy adults with overweight or obesity and without diabetes; mean age 34–57 years.",
+    "Drugs assessed: 12 agents — 3 commercially available (liraglutide, semaglutide, tirzepatide) and 9 premarket agents including retatrutide, CagriSema.",
+    "Treatment duration: 16–104 weeks; median 43 weeks.",
+    "Efficacy vs placebo: tirzepatide 15 mg/wk → −17.8% (95% CI −16.3% to −19.3%) at 72 weeks; semaglutide 2.4 mg/wk → −13.9% (CI −11.0% to −16.7%) at 68 weeks; liraglutide 3.0 mg/day → −5.8% (CI −3.6% to −8.0%) at 26 weeks.",
+    "Investigational retatrutide 12 mg/wk → −22.1% (CI −19.3% to −24.9%) at 48 weeks — largest weight loss recorded.",
+    "Safety: any AE 80–97% GLP-1 vs 63–100% placebo; GI AEs 47–84% vs 13–63%; most common nausea/vomiting/diarrhea/constipation.",
+    "Discontinuation due to AEs: 0–26% vs 0–9%; serious AEs 0–10% vs 0–12%."
+  ],
+  "limitations": "No head-to-head RCTs available — efficacy ranking inferred from placebo-controlled trials only. Heterogeneity prevented meta-analysis (narrative synthesis only). Treatment durations vary widely (16–104 weeks) — long-term durability uncertain.",
+  "relevance": "Bullseye paper for the PICO: it is the most recent (2025) systematic review specifically restricted to non-diabetic adults — exactly matching this review's eligibility. Provides the canonical efficacy numbers (semaglutide ~14%, tirzepatide ~18%, retatrutide ~22%) and safety profile.",
+  "depth": "shallow"
+}

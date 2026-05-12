@@ -1,0 +1,14 @@
+{
+  "method": "evidence_unavailable: oa_paywall — extracted from Crossref/Wiley abstract + plain-language summary.",
+  "findings": [
+    "Design: narrative review of real-world evidence (RWE) on liraglutide / semaglutide / tirzepatide for weight management.",
+    "Real-world weight loss < RCT — but converges toward trial numbers among highly adherent patients.",
+    "Discontinuation: 20–50% within first year in real-world cohorts.",
+    "Real-world dosing: many patients use lower than trial-tested doses.",
+    "GI AEs frequent in RWE (consistent with RCTs) but no clear elevated risk of pancreatitis, pancreatic cancer, thyroid disorders, or depression/self-harm at the class level.",
+    "Eye disease (NAION, retinopathy) and other rare outcomes — RWE still insufficient.",
+    "Authors list 10 priority RWE research areas: discontinuation drivers, suboptimal dosing, stopping effects, hard outcomes (CV/renal/cancer/neuropsychiatric/musculoskeletal/infection), cost-effectiveness."
+  ],
+  "limitations": "Narrative (not systematic) — selection bias on included RWE studies. Heterogeneous observational designs aggregated qualitatively. Generalizability of RWE to non-diabetic obesity-only patients is partial because many cohorts mix T2D and non-T2D.",
+  "relevance": "Real-world counterweight to the clean RCT efficacy numbers from Annals/BMJ. Reinforces the discontinuation theme from JAMA Network Open 2025. Directly informs the synthesis-tension between RCT efficacy and real-world durability."
+}
