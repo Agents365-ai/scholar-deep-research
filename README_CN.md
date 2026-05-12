@@ -2,42 +2,46 @@
 
 [English](README.md) · 🌐 **官网:** [agents365-ai.github.io/scholar-deep-research/zh.html](https://agents365-ai.github.io/scholar-deep-research/zh.html)
 
-8 阶段（Phase 0..7）、脚本驱动的学术研究工作流，将研究问题转化为结构化、带引用的研究报告。跨 7 个数据库联邦检索，强制自我批判，Phase 3 并行精读派发，Phase 4 双 backend（OpenAlex + Semantic Scholar）引用追溯。
+让 LLM "帮我写一份 X 领域的综述",你会撞到三种失败:引用瞎编、跑一轮就停所以遗漏领域里的标志性论文、报告里没有任何记录解释"为什么选这些论文"。`scholar-deep-research` 用 8 阶段(Phase 0..7)、脚本驱动的工作流修这三件事 —— 强制引文锚点、多轮饱和度门控、每篇论文都有完整审计轨迹。
 
-**流水线内部不含任何 LLM 调用**。`scripts/` 下每个脚本都是纯数据处理 — 检索、去重、排序、追引、参考文献导出。宿主 LLM 在外部通过 stdout 的 JSON 信封编排。这种分工换来可复现性、可审计性，以及一套 330 项的冒烟测试，约 12 秒跑完，无需 API key。
+**流水线内部不含任何 LLM 调用**。`scripts/` 下每个脚本都是纯数据处理 —— 检索、去重、排序、追引、参考文献导出。宿主 LLM 在外部通过 stdout 的 JSON 信封编排。这种分工换来可复现性、可审计性,以及一套 343 项的冒烟测试,约 13 秒跑完,无需 API key。
 
-支持 Claude Code、Cursor、Codex、OpenCode、OpenClaw / ClawHub、Hermes Agent、pi-mono、SkillsMP — 任何兼容 [Agent Skills](https://agentskills.io) 格式的 agent。
+支持 Claude Code、Cursor、Codex、OpenCode、OpenClaw / ClawHub、Hermes Agent、pi-mono、SkillsMP —— 任何兼容 [Agent Skills](https://agentskills.io) 格式的 agent。
 
-## 能力概览
+## 实例展示
 
-| 能力 | 细节 |
-|---|---|
-| Phase 0..7 带引用报告流水线 | 7 道强制阶段跃迁门控（`_gates.py` 中的 G1..G7），无法通过直接设置 `phase` 跳过 |
-| 7 个联邦数据源 | OpenAlex、arXiv、Crossref、PubMed、DBLP、bioRxiv（全部免费、无 key）；Exa（可选，需 `EXA_API_KEY`） |
-| 跨源去重 | DOI 优先、标题相似度兜底；一篇论文一条记录 |
-| 三轴饱和度 | 论文 / 作者 / 期刊新增率必须**同时**低于阈值才结束 Phase 1 |
-| 并行精读派发 | 选中论文切成 `deep` / `skim` / `defer` 三档；deep 档每波 8–10 个独立上下文 agent 派发 |
-| 透明排序 | 公开公式 `α·相关性 + β·引用 + γ·时效 + δ·期刊先验`，各分量写入 state |
-| 强制 Phase 6 自我批判 | 14 项对抗性检查清单，发现写入报告附录 |
-| 引用严谨 | 每条非平凡论断必须带 `[^id]` 锚点，无锚点不通过门控 |
-| 5 种报告原型 | `literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background` |
-| BibTeX / CSL-JSON / RIS 导出 | 参考文献从 state 生成，无需重打 |
-| Markdown 报告 + Agent 渲染 HTML | pipeline 产物 `reports/<slug>_<YYYYMMDD>.md` + `.bib`；HTML 交付页面交由宿主 coding agent 按需渲染 |
+三次端到端真实跑都原样提交进仓库,带完整审计轨迹(state、证据文件、报告、BibTeX、记录摩擦点的 run notes):
 
-## 工作流（每阶段一句话）
+- **[GLP-1 用于非糖尿病肥胖治疗](examples/glp1-obesity-systematic-review/)** —— `systematic_review`,833 篇文献,5 篇精读,围绕疗效/安全性/停药的 12-引用报告。
+- **[Mamba vs Transformer 长上下文对比](examples/mamba-vs-transformer-comparative/)** —— `comparative_analysis`,1005 篇文献,3 篇精读(Mamba、Jamba、xLSTM),5 个维度对比 + 结论。
+- **[AAV 衣壳工程用于脑内基因递送](examples/aav-capsid-cns-grant-background/)** —— `grant_background`,681 篇文献,4 篇机制论文精读(LY6A、CAP-B10、Q588T 单残基、LRP6)。
+
+## 跟"直接问 LLM"有什么不同
+
+| | 原生 agent | 本 skill |
+|---|---|---|
+| 检索覆盖 | 一轮一个源 | 7 源联邦,多轮 + 饱和度门控 |
+| 引文严谨度 | 论断游荡,引文有时瞎编 | 每条论断必须带 `[^id]` 锚点;无锚点不通过门控 |
+| 审计轨迹 | 无 | 每篇论文的打分分量、证据、来源源信都写进 `research_state.json` |
+| 自我批判 | 无 | 报告出炉前强制走 14 项对抗性检查清单(Phase 6) |
+| 报告形态 | 通用大纲 | 5 种原型(`literature_review` / `systematic_review` / `scoping_review` / `comparative_analysis` / `grant_background`) |
+
+完整能力对比见 [docs/COMPARISON_CN.md](docs/COMPARISON_CN.md)。
+
+## 工作流(每阶段一句话)
 
 ```
 Phase 0  Scope        问题拆解 + 原型选择 + 状态初始化
-Phase 1  Discovery    多源检索 → 去重 → 三轴饱和度检查
+Phase 1  Discovery    多源检索 → 去重 → 多轴饱和度检查
 Phase 2  Triage       排序 → top-N 选择 → 分档 triage → 可选 PDF 预取
 Phase 3  Deep read    deep 档并行 agent 派发 + skim 档摘要证据片段
-Phase 4  Chasing      引用网络（正向 + 反向，OpenAlex + S2 双后端）
+Phase 4  Chasing      引用网络(正向 + 反向,OpenAlex + S2 双后端)
 Phase 5  Synthesis    主题聚类 → 张力图谱
-Phase 6  Self-critique  14 项对抗性检查清单（强制）
+Phase 6  Self-critique  14 项对抗性检查清单(强制)
 Phase 7  Report       渲染原型模板 → 导出参考文献
 ```
 
-完整图示 + Mermaid 流程图 + 门控语义见 [docs/ARCHITECTURE_CN.md](docs/ARCHITECTURE_CN.md)。
+完整图示、Mermaid 流程图、门控语义见 [docs/ARCHITECTURE_CN.md](docs/ARCHITECTURE_CN.md)。
 
 ## 快速开始
 
@@ -50,27 +54,35 @@ npx skills add Agents365-ai/365-skills -g
 > /plugin install scholar-deep-research
 ```
 
-随后在安装目录执行 `pip install -r requirements.txt`。完整说明见 [docs/INSTALL_CN.md](docs/INSTALL_CN.md)。
+随后在安装目录执行 `pip install -r requirements.txt`。
 
-装完后直接描述你要的：
+装完后直接描述你要的:
 
 ```
 帮我做一份关于 CRISPR 碱基编辑治疗杜氏肌营养不良的深度研究报告。
 ```
 
-skill 自动走完 8 个阶段，把报告写到 `reports/<slug>_<YYYYMMDD>.md` 并附带同名 `.bib`。完整示例见 [docs/WALKTHROUGH_CN.md](docs/WALKTHROUGH_CN.md)。
+skill 自动走完 8 个阶段,把报告写到 `reports/<slug>_<YYYYMMDD>.md` 并附带同名 `.bib`。完整安装说明见 [docs/INSTALL_CN.md](docs/INSTALL_CN.md);逐阶段示例见 [docs/WALKTHROUGH_CN.md](docs/WALKTHROUGH_CN.md)。
+
+## 它**不**做什么
+
+- **不查 Google Scholar / Web of Science / Scopus** —— 没有公开 API;如果你的主题需要,在报告附录里标注"未查询"。
+- **不自动获取付费墙后的全文** —— 只走开放获取;闭源论文回退到 landing page 摘要。
+- **开箱不带语义重排序** —— 相关性是词袋打分;如果需要,把 embedding 模型的结果写回 `state.papers[*].score_components.relevance`,流水线为此设计。
+- **饱和度是基于新增率,不是基于穷尽** —— 它能判断"探索停滞了",但不能判断"所有相关论文都找齐了"。需要更严格的覆盖用 `systematic_review` + `SCHOLAR_SATURATION_NEW_PCT=20`。
+
+完整清单见 [docs/LIMITATIONS_CN.md](docs/LIMITATIONS_CN.md)。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [docs/WALKTHROUGH_CN.md](docs/WALKTHROUGH_CN.md) | 完整 CRISPR 碱基编辑示例，逐阶段展示 |
-| [docs/ARCHITECTURE_CN.md](docs/ARCHITECTURE_CN.md) | 8 阶段、门控、状态模型、幂等、CLI 契约、MCP/WebFetch 边界 |
-| [docs/COMPARISON_CN.md](docs/COMPARISON_CN.md) | 与原生 agent 对比能力表 |
-| [docs/INSTALL_CN.md](docs/INSTALL_CN.md) | 插件市场、手动 clone、跨平台路径、环境变量 |
-| [docs/LIMITATIONS_CN.md](docs/LIMITATIONS_CN.md) | 覆盖范围、引用计数缺口、语言偏倚、饱和度语义 |
-| [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | 宿主 LLM 读的工作流指引 |
-| [examples/](examples/) | 完整审计轨迹的端到端实例:**GLP-1 系统综述**(生物医学,833 篇)、**Mamba vs Transformer 对比分析**(CS,1005 篇)、**AAV 衣壳工程脑递送基金背景**(生物医学,681 篇,4 篇精读,lint 通过) |
+| [WALKTHROUGH](docs/WALKTHROUGH_CN.md) | 完整 CRISPR 碱基编辑示例,逐阶段展示 |
+| [ARCHITECTURE](docs/ARCHITECTURE_CN.md) | 8 阶段、门控、状态模型、幂等、CLI 契约、MCP/WebFetch 边界 |
+| [COMPARISON](docs/COMPARISON_CN.md) | 与原生 agent 对比的完整能力表 |
+| [COMPETITORS](docs/COMPETITORS_CN.md) | 与其它开源 deep research 工具的对比矩阵(GPT-Researcher、STORM、open_deep_research、ARS) |
+| [INSTALL](docs/INSTALL_CN.md) | 插件市场、手动 clone、跨平台路径、环境变量 |
+| [LIMITATIONS](docs/LIMITATIONS_CN.md) | 覆盖范围、引用计数缺口、语言偏倚 |
 
 ## 社群
 
@@ -83,7 +95,7 @@ skill 自动走完 8 个阶段，把报告写到 `reports/<slug>_<YYYYMMDD>.md` 
 
 ## 支持作者
 
-如果这个 skill 对你有帮助，欢迎请作者喝杯咖啡：
+如果这个 skill 对你有帮助,欢迎请作者喝杯咖啡:
 
 <table>
   <tr>
@@ -110,13 +122,6 @@ skill 自动走完 8 个阶段，把报告写到 `reports/<slug>_<YYYYMMDD>.md` 
   </tr>
 </table>
 
-## 作者
+## 作者 / 许可证
 
-**Agents365-ai**
-
-- Bilibili: https://space.bilibili.com/441831884
-- GitHub: https://github.com/Agents365-ai
-
-## 许可证
-
-MIT
+**Agents365-ai** · [Bilibili](https://space.bilibili.com/441831884) · [GitHub](https://github.com/Agents365-ai) · MIT
