@@ -70,7 +70,7 @@ skill 自动走完 8 个阶段，把报告写到 `reports/<slug>_<YYYYMMDD>.md` 
 | [docs/INSTALL_CN.md](docs/INSTALL_CN.md) | 插件市场、手动 clone、跨平台路径、环境变量 |
 | [docs/LIMITATIONS_CN.md](docs/LIMITATIONS_CN.md) | 覆盖范围、引用计数缺口、语言偏倚、饱和度语义 |
 | [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | 宿主 LLM 读的工作流指引 |
-| [examples/](examples/) | 完整审计轨迹的端到端实例:**GLP-1 系统综述**(生物医学,833 篇文献,12-引用报告)和 **Mamba vs Transformer 对比分析**(CS,1005 篇,lint 通过) |
+| [examples/](examples/) | 完整审计轨迹的端到端实例:**GLP-1 系统综述**(生物医学,833 篇)、**Mamba vs Transformer 对比分析**(CS,1005 篇)、**AAV 衣壳工程脑递送基金背景**(生物医学,681 篇,4 篇精读,lint 通过) |
 
 ## 社群
 

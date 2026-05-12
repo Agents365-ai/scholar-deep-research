@@ -1,0 +1,11 @@
+{
+  "method": "full deep read of Goertsen et al. 2021 (Nat Neurosci) introducing AAV.CAP-B10 and AAV.CAP-B22",
+  "findings": [
+    "M-CREATE (Multiplexed-CREATE) directed-evolution platform identifies CAP-B10, a 7-mer peptide insertion on AAV9 between residues 588-589, that drives brain-wide neuronal transduction in C57BL/6J at 10× higher efficiency than parent AAV9 while reducing liver transduction ~10×.",
+  "CAP-B10 transduction is preserved across mouse strains (including BALB/c) — unlike PHP.B which fails in BALB/c — strongly suggesting CAP-B10 uses a different (non-LY6A) BBB receptor.",
+    "CAP-B22 is a sister variant with comparable brain transduction but slightly different tropism profile; both retain primate vasculature binding in cynomolgus brain endothelial cells in vitro (later validated in vivo by Goertsen et al. 2022 Neuron paper).",
+    "Liver de-targeting is achieved by the same single 7-mer insertion — no separate de-targeting engineering required, suggesting the brain-receptor-binding face of the capsid sterically blocks the canonical liver glycan receptor."
+  ],
+  "limitations": "Mechanistic basis for liver de-targeting and the identity of the (presumed novel) BBB receptor were unknown at publication. In vivo NHP data was preliminary. Long-term durability and transgene-expression silencing not assessed.",
+  "relevance": "The flagship engineered-capsid paper for CNS delivery as of 2021-2024; combined brain-targeting + liver de-targeting in a single 7-mer insertion is the proof-of-concept that grant proposals point to when arguing capsid engineering can solve both BBB penetration and off-target liver tropism in one step."
+}

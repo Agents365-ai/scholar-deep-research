@@ -1,0 +1,11 @@
+{
+  "method": "full deep read of Stanford et al. 2024 (Nat Commun) 'Human cell surface-AAV interactomes identify LRP6 as BBB transcytosis receptor'",
+  "findings": [
+    "Cell-surface proteomic interactome screen across panel of engineered AAVs identifies LRP6 (low-density lipoprotein receptor-related protein 6) as a high-affinity binder for multiple primate-translatable BBB-crossing capsids, including a CAP-B10-related variant.",
+    "LRP6 is expressed on both human and NHP brain microvascular endothelium, in contrast to LY6A, providing the first primate-relevant transcytosis receptor for engineered AAVs.",
+    "LRP6 knockdown in BBB transwell models reduces transcytosis of LRP6-binding capsids ~70%, while leaving classical AAV9 trafficking intact, demonstrating that LRP6 binding is mechanistically required for active transcytosis (not paracellular leak).",
+    "The LRP6-binding interface maps onto the 7-mer peptide insertion region — providing a structural target for de novo rational design of next-generation BBB capsids."
+  ],
+  "limitations": "In vivo primate data lags the in vitro mechanistic claim. Capsid panel does not exhaustively cover the published engineered-AAV landscape (e.g. AAV.CAP-Mac, AAV-BR1 not tested). Crosstalk with Wnt signaling (LRP6's native function) and possible neurotoxicity from chronic capsid-mediated receptor engagement remain unstudied.",
+  "relevance": "Closes the gap left by Hordeaux 2019: provides a primate-conserved BBB receptor that engineered capsids actually use, replacing the mouse-only LY6A pathway. Any 2024+ grant on capsid engineering can now propose mechanism-guided design targeting LRP6 rather than library-only directed evolution."
+}

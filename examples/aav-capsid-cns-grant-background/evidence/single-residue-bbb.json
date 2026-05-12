@@ -1,0 +1,11 @@
+{
+  "method": "full deep read of Eid et al. 2023 (Mol Ther Methods Clin Dev) 'Every little bit helps: A single-residue switch in a vascular AAV enables BBB crossing'",
+  "findings": [
+    "A single amino-acid substitution (Q588T) in a vascular-targeting AAV variant converts it from a vasculature-restricted phenotype to a BBB-crossing, brain-parenchyma-transducing capsid in C57BL/6J mice.",
+    "The substitution does not alter the 7-mer insertion peptide; it lies in the conserved AAV9 backbone, suggesting that BBB transcytosis competence is gated by a distinct capsid surface from cell-binding affinity.",
+    "Crucially, the single-residue change does not introduce a new LY6A binding site (the variant remains LY6A-independent), arguing that BBB transcytosis can be evolved independently of receptor-mediated endothelial binding.",
+    "Comparable single-residue switches at structurally equivalent positions in CAP-B10 and AAV9 do NOT confer BBB crossing, indicating the effect is epistatic on the parent variant's surface chemistry."
+  ],
+  "limitations": "Mechanism of how a single residue gates transcytosis is not resolved. Tested in C57BL/6J only; cross-strain and NHP transferability are open questions. Sample size is small.",
+  "relevance": "Demonstrates that BBB-crossing competence can be acquired by a single point mutation in directed-evolution backgrounds — directly motivates rational mutagenesis of existing brain capsids (CAP-B10, PHP.eB, AAV-BR1) instead of always going back to library selection. Important data point for grants arguing for rational + directed-evolution hybrid pipelines."
+}

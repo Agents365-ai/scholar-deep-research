@@ -70,7 +70,7 @@ The skill walks the 8 phases automatically and writes the report to `reports/<sl
 | [docs/INSTALL.md](docs/INSTALL.md) | Plugin marketplace, manual clone, multi-platform paths, env vars |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Coverage caveats, citation-count gaps, language bias, saturation semantics |
 | [skills/scholar-deep-research/SKILL.md](skills/scholar-deep-research/SKILL.md) | The workflow guide the host LLM reads |
-| [examples/](examples/) | End-to-end runs with full audit trail: **GLP-1 systematic review** (biomedical, 833 papers, 12-citation report) and **Mamba vs Transformer comparative** (CS, 1005 papers, lint-clean comparison) |
+| [examples/](examples/) | End-to-end runs with full audit trail: **GLP-1 systematic review** (biomedical, 833 papers), **Mamba vs Transformer comparative** (CS, 1005 papers), and **AAV capsid CNS grant background** (biomedical, 681 papers, 4 deep reads, lint-clean) |
 
 ## Community
 

@@ -1,0 +1,11 @@
+{
+  "method": "full deep read of Hordeaux et al. 2019 (PLOS ONE), augmented with crossref of Huang et al. 2019 (PNAS) which independently identified LY6A",
+  "findings": [
+    "AAV-PHP.B's brain-wide transduction in C57BL/6J mice is mediated by binding to LY6A, a GPI-anchored cell-surface protein expressed on cerebral vascular endothelium.",
+    "Strain-specific knockout: BALB/c mice carry an LY6A allele with reduced PHP.B binding, explaining the well-known cross-strain failure of PHP.B in BALB/c and primates.",
+    "LY6A is the first molecular receptor identified for a synthetically evolved AAV brain capsid, demonstrating that in vivo selection captures species-specific cell-surface biology rather than a universal BBB-crossing mechanism.",
+    "Decoy experiments with soluble LY6A-Fc fully block PHP.B transduction in C57BL/6J brain, confirming LY6A is both necessary and sufficient for the strain-specific tropism."
+  ],
+  "limitations": "Single-receptor model does not explain residual transduction in LY6A-knockout C57BL/6J mice (~10-20% of WT). LY6A is not expressed in primate vasculature, predicting (correctly) that PHP.B does not translate to NHP. The study does not test whether other GPI-anchored proteins compensate.",
+  "relevance": "Foundational paper for the BBB-mechanism cluster: explains the strain-specific failure mode that has plagued the field, and frames the receptor-discovery problem for any newer engineered capsid (CAP-B10, CAP-B22, AAV.BR1). Any grant background on capsid engineering must cite this paper to motivate primate-translatable receptor selection."
+}
