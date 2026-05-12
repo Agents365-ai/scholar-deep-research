@@ -6,6 +6,18 @@ Notable changes to `scholar-deep-research`. Format follows
 
 <!-- towncrier release notes start -->
 
+## 0.15.0 — 2026-05-12
+
+### Features
+
+- New `list_sources.py` script + `SOURCE_META` constant on every
+  `search_*.py`. Orchestrators can now query the federated search
+  registry by domain, index type, auth requirement, or
+  needs-relevance-filter flag — no more grepping each script's
+  docstring to plan which sources to hit. Schema in `_search_meta.py`,
+  validated at discovery, errors surfaced under `validation_warnings`.
+
+
 ## 0.14.3 — 2026-05-12
 
 ### Internal refactor
